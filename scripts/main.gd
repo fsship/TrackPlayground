@@ -41,6 +41,13 @@ var follow_train = false
 var mode = "operate"
 var selected_track = "core:HO:straight"
 var track_placement_endpoint = 0
+var flex_options: Dictionary = {}
+var auto_connect = false
+var connection_start: Dictionary = {}
+var connection_plan: Dictionary = {}
+var connection_key = ""
+var connection_min_radius = 180.0
+var connection_marker: MeshInstance3D
 var selected_scenery = "core:tree"
 var selected_train = 1
 var yaw = 0.0
@@ -122,6 +129,8 @@ func _ready() -> void:
 	toast("欢迎来到轨道工坊。右键旋转视角，滚轮缩放；选择顶部工具开始搭建。", 8.0)
 	if "--self-test" in OS.get_cmdline_user_args():
 		call_deferred("integration_test")
+	if "--flex-test" in OS.get_cmdline_user_args():
+		call_deferred("flex_test")
 	if "--capture" in OS.get_cmdline_user_args():
 		call_deferred("capture_preview")
 
@@ -173,6 +182,8 @@ func create_world() -> void:
 	add_child(train_root)
 	marker = Geometry.cylinder(self, 0.18, 0.035, Vector3.ZERO, MINT)
 	marker.visible = false
+	connection_marker = Geometry.cylinder(self, 0.23, 0.05, Vector3.ZERO, AMBER)
+	connection_marker.visible = false
 	brush_ring = MeshInstance3D.new()
 	var ring = TorusMesh.new()
 	ring.inner_radius = 0.97
@@ -484,6 +495,8 @@ func clear_children(node: Node) -> void:
 
 func set_mode(value: String) -> void:
 	mode = value
+	reset_connection()
+	auto_connect = false
 	placing_train = false
 	track_placement_endpoint = 0
 	erase = false
@@ -531,14 +544,22 @@ func set_mode(value: String) -> void:
 	responsive_layout()
 
 func build_track_ui() -> void:
+	button(left_body, "自动连接 · 选择两个端点", begin_auto_connect)
+	label(left_body, "自动连接最小半径 / mm", 12, MUTED)
+	spin(left_body, 80, 2000, 10, connection_min_radius, func(v): connection_min_radius = v; connection_key = "")
+	separator(left_body)
+	build_flex_options()
 	label(left_body, "选择零件，再点击沙盘放置", 12, MUTED)
 	for def in catalog.tracks_for_scale(graph.scale_name):
+		if def.kind == "flex" and def.shape == "bezier":
+			continue
 		var caption = def.name
 		if def.kind == "straight":
 			caption += "  ·  %d mm" % def.length_mm
-		else:
+		elif def.kind != "flex":
 			caption += "  ·  R%d" % def.radius_mm
-		var b = button(left_body, caption, func(): selected_track = def.id; track_placement_endpoint = 0; erase = false; preview_key = ""; update_preview(); toast("已选中 " + def.name))
+		var b = button(left_body, caption, func(): select_track(def.id))
+		b.modulate = MINT if def.id == selected_track else Color.WHITE
 		b.tooltip_text = def.source + " / " + def.id
 	separator(left_body)
 	var r = HBoxContainer.new()
@@ -550,16 +571,62 @@ func build_track_ui() -> void:
 	spin(left_body, -60, 400, 1, placement_height * 100, func(v): placement_height = v / 100; preview_key = "")
 	label(left_body, "线路坡度 / %", 12, MUTED)
 	spin(left_body, -8, 8, 0.1, grade * 100, func(v): grade = v / 100; preview_key = "")
-	button(left_body, "橡皮擦 · 点击删除轨道", func(): erase = not erase; preview_key = ""; toast("轨道橡皮擦" if erase else "恢复铺轨"))
+	button(left_body, "橡皮擦 · 点击删除轨道", func(): reset_connection(); auto_connect = false; erase = not erase; preview_key = ""; toast("轨道橡皮擦" if erase else "恢复铺轨"))
 	button(left_body, "整平全部轨道路基", conform_terrain)
 	var tip = label(left_body, "道岔在行车模式中点击切换。占用中的轨道和道岔会锁定。", 12, MUTED)
 	tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+
+func build_flex_options() -> void:
+	var definition: Dictionary = catalog.tracks[selected_track]
+	if definition.kind == "flex" and definition.shape != "bezier":
+		label(left_body, definition.name + "参数", 14, AMBER)
+		var options = RailFlexTrack.settings(definition, flex_options)
+		if definition.shape != "arc":
+			label(left_body, "长度 / mm" if definition.shape != "s" else "纵向跨度 / mm", 12, MUTED)
+			spin(left_body, 10, 2000, 5, options.length_mm, func(v): flex_options.length_mm = v; preview_key = "")
+		if definition.shape in ["arc", "transition"]:
+			label(left_body, "半径 / mm" if definition.shape == "arc" else "末端半径 / mm", 12, MUTED)
+			spin(left_body, 80, 5000, 10, options.radius_mm, func(v): flex_options.radius_mm = v; preview_key = "")
+		if definition.shape == "arc":
+			label(left_body, "转角 / °", 12, MUTED)
+			spin(left_body, 1, 180, 1, options.angle_deg, func(v): flex_options.angle_deg = v; preview_key = "")
+		if definition.shape == "s":
+			label(left_body, "横向偏移 / mm", 12, MUTED)
+			spin(left_body, -1000, 1000, 5, options.offset_mm, func(v): flex_options.offset_mm = v; preview_key = "")
+		separator(left_body)
+
+func select_track(id: String) -> void:
+	selected_track = id
+	flex_options = {}
+	set_mode("track")
+	update_preview()
+	toast("已选中 " + catalog.tracks[id].name)
+
+func reset_connection() -> void:
+	connection_start = {}
+	connection_plan = {}
+	connection_key = ""
+	if connection_marker:
+		connection_marker.visible = false
+
+func begin_auto_connect() -> void:
+	reset_connection()
+	auto_connect = true
+	erase = false
+	preview_key = ""
+	update_preview()
+	toast("依次点击两个开放端点；悬浮第二个端点预览连接，Esc 取消。", 7)
+
+func connection_hint() -> String:
+	return ("自动连接：请选择第一个开放端点" if connection_start.is_empty() else "自动连接：请选择第二个开放端点 · 点击已选端点可重选") + " · Esc 取消"
 
 func track_placement_hint() -> String:
 	var names = ["入口", "直股端", "侧股端"] if catalog.tracks[selected_track].kind == "turnout" else ["起点", "终点"]
 	return "当前端点：" + names[track_placement_endpoint % names.size()] + " · " + TRACK_HINT
 
 func cycle_track_endpoint() -> void:
+	if auto_connect:
+		return
 	var count = 3 if catalog.tracks[selected_track].kind == "turnout" else 2
 	track_placement_endpoint = (track_placement_endpoint + 1) % count
 	update_preview()
@@ -768,21 +835,25 @@ func empty_scene(refresh: bool = true, width: float = Terrain.WIDTH, depth: floa
 		toast("空白沙盘已就绪。先铺设轨道，再添加列车。")
 
 func rebuild_rails() -> void:
+	connection_key = ""
 	clear_children(rail_root)
 	var gauge: float = RailCatalog.SCALES[graph.scale_name].gauge_mm / 100.0
 	for p in graph.parts:
-		var paths = graph.make_paths(catalog.tracks[p.definition], Graph.array_v(p.position), p.yaw, p.get("grade",0), p.get("mirror", false))
+		var paths = graph.part_paths(p)
 		var node = Geometry.track(paths, gauge)
 		Derailment.track_collision(node, paths, gauge)
 		rail_root.add_child(node)
 		if paths.size() > 1:
 			var point: Vector3 = paths[int(p.get("branch", 0))][mini(6, paths[0].size() - 1)]
 			Geometry.cylinder(node, gauge * 0.4, 0.05, point + Vector3(0, 0.14, gauge), AMBER if p.get("branch", 0) == 0 else MINT)
-		for end in [0, 1]:
-			var id = str(int(p.uid)) + ":0"
-			if graph.connections[graph.endpoint_key(id, end)].is_empty():
-				var ep = graph.endpoint(id, end)
-				Geometry.cylinder(node, gauge * 0.20, 0.015, ep.position + Vector3.UP * 0.09, AMBER)
+		for branch in paths.size():
+			for end in [0, 1]:
+				if branch > 0 and end == 0:
+					continue
+				var id = str(int(p.uid)) + ":" + str(branch)
+				if graph.connections[graph.endpoint_key(id, end)].is_empty():
+					var ep = graph.endpoint(id, end)
+					Geometry.cylinder(node, gauge * 0.32, 0.025, ep.position + Vector3.UP * 0.09, AMBER)
 	refresh_stats()
 
 func rebuild_trains() -> void:
@@ -949,7 +1020,7 @@ func update_preview() -> void:
 	if placing_train:
 		status_label.text = "悬浮轨道预览编组 · 蓝色可放置 / 红色不可放置 · Tab 切换方向 · Esc 取消"
 	elif mode == "track" and not erase:
-		status_label.text = track_placement_hint()
+		status_label.text = connection_hint() if auto_connect else track_placement_hint()
 	if not over_canvas():
 		return
 	if mode == "operate" and placing_train:
@@ -957,6 +1028,9 @@ func update_preview() -> void:
 		return
 	if mode == "track" and not erase:
 		var snap = pick_endpoint()
+		if auto_connect:
+			update_connection_preview(snap)
+			return
 		var hit: Vector3 = mouse_world() if snap.is_empty() else snap.position
 		if hit.is_finite():
 			update_track_preview(hit, snap)
@@ -987,7 +1061,7 @@ func update_preview() -> void:
 		marker.visible = true
 
 func update_track_preview(hit: Vector3, snap: Dictionary) -> void:
-	var paths = graph.make_paths(catalog.tracks[selected_track], Vector3.ZERO, 0, grade, mirror)
+	var paths = graph.make_paths(catalog.tracks[selected_track], Vector3.ZERO, 0, grade, mirror, flex_options)
 	var endpoints = Graph.placement_endpoints(paths)
 	track_placement_endpoint %= endpoints.size()
 	var endpoint: Dictionary = endpoints[track_placement_endpoint]
@@ -1001,7 +1075,7 @@ func update_track_preview(hit: Vector3, snap: Dictionary) -> void:
 		placement_yaw = atan2(snap.out.z, -snap.out.x) - atan2(-endpoint.out.z, endpoint.out.x)
 	placement = anchor - endpoint.position.rotated(Vector3.UP, placement_yaw)
 	valid_placement = true
-	var key = selected_track + str(mirror) + str(grade)
+	var key = selected_track + str(mirror) + str(grade) + str(flex_options)
 	if key != preview_key or preview == null:
 		if preview:
 			preview.queue_free()
@@ -1013,6 +1087,77 @@ func update_track_preview(hit: Vector3, snap: Dictionary) -> void:
 	preview.visible = true
 	marker.position = anchor + Vector3.UP * 0.10
 	marker.visible = true
+	if catalog.tracks[selected_track].kind == "flex":
+		var world_paths = graph.make_paths(catalog.tracks[selected_track], placement, placement_yaw, grade, mirror, flex_options)
+		var measured = RailFlexTrack.measure(world_paths[0], terrain.width, terrain.depth)
+		valid_placement = measured.error.is_empty()
+		if valid_placement and RailFlexTrack.self_crosses(world_paths[0]):
+			valid_placement = false
+			measured.error = "曲线自交，请减小长度或增大半径"
+		Geometry.apply_preview_material(preview, Geometry.material(TRAIN_PREVIEW_VALID if valid_placement else TRAIN_PREVIEW_INVALID))
+		status_label.text = ("柔轨 %.0f mm · " % (measured.length * 100) + track_placement_hint()) if valid_placement else measured.error
+
+func update_connection_preview(target: Dictionary) -> void:
+	if not connection_start.is_empty() and not graph.is_open_endpoint(connection_start):
+		reset_connection()
+	if target.is_empty():
+		return
+	marker.position = target.position + Vector3.UP * 0.12
+	marker.visible = true
+	# Clicking even an invalid candidate explains the failure and retains A.
+	valid_placement = true
+	if connection_start.is_empty():
+		return
+	var key = str(connection_start.edge) + str(connection_start.end) + str(target.edge) + str(target.end) + str(connection_min_radius)
+	if key != connection_key:
+		connection_plan = graph.plan_connection(connection_start, target, terrain.width, terrain.depth, connection_min_radius / 100.0)
+		connection_key = key
+		if preview:
+			preview.queue_free()
+		preview = null
+		if connection_plan.has("points"):
+			preview = Geometry.track([connection_plan.points], RailCatalog.SCALES[graph.scale_name].gauge_mm / 100, true)
+			Geometry.apply_preview_material(preview, Geometry.material(TRAIN_PREVIEW_VALID if connection_plan.error.is_empty() else TRAIN_PREVIEW_INVALID))
+			add_child(preview)
+			preview.position.y = 0.012
+	if preview:
+		preview.visible = true
+	if connection_plan.error.is_empty():
+		status_label.text = "可连接 · 长 %.0f mm · 最大坡度 %.1f%% · 左键完成 · Esc 取消" % [connection_plan.length * 100, connection_plan.max_grade * 100]
+	else:
+		status_label.text = connection_plan.error + " · 可换选其他端点"
+
+func choose_connection_endpoint(target: Dictionary) -> bool:
+	if not graph.is_open_endpoint(target):
+		toast("请选择开放端点")
+		return false
+	if connection_start.is_empty():
+		connection_start = graph.endpoint(target.edge, target.end)
+		connection_marker.position = connection_start.position + Vector3.UP * 0.14
+		connection_marker.visible = true
+		connection_key = ""
+		toast("已选择起点，请点击第二个开放端点。")
+		return false
+	if target.position.distance_to(connection_start.position) < 0.0001:
+		reset_connection()
+		toast("已清除起点，请重新选择。")
+		return false
+	# Revalidate on commit so deleted/connected endpoints cannot use stale plans.
+	var result = graph.plan_connection(connection_start, target, terrain.width, terrain.depth, connection_min_radius / 100.0)
+	if not result.error.is_empty():
+		toast("无法自动连接：" + result.error, 7)
+		return false
+	push_undo()
+	graph.add_part("core:" + graph.scale_name + ":flex_link", connection_start.position, 0, 0, false, {"controls":result.controls})
+	reset_connection()
+	if preview:
+		preview.queue_free()
+		preview = null
+	preview_key = ""
+	rebuild_rails()
+	layout_changed.emit()
+	toast("已连接两个端点 · 柔轨 %.0f mm · Ctrl+Z 可撤销" % (result.length * 100), 6)
+	return true
 
 func update_train_preview(hit: Dictionary) -> void:
 	valid_placement = false
@@ -1098,7 +1243,7 @@ func _unhandled_input(event: InputEvent) -> void:
 func _input(event: InputEvent) -> void:
 	# Handle Tab before GUI focus navigation consumes it. Keep normal Tab
 	# navigation in dialogs, editors and tools that do not use placement anchors.
-	if event is InputEventKey and event.keycode == KEY_TAB and ((placing_train and mode == "operate") or (mode == "track" and not erase)):
+	if event is InputEventKey and event.keycode == KEY_TAB and ((placing_train and mode == "operate") or (mode == "track" and not erase and not auto_connect)):
 		var focus = get_viewport().gui_get_focus_owner()
 		if not file_dialog.visible and not mod_dialog.visible and not confirm_dialog.visible and not new_scene_dialog.visible and not (focus is LineEdit or focus is TextEdit):
 			if event.pressed and not event.echo:
@@ -1117,7 +1262,9 @@ func canvas_click() -> void:
 		brush_active = true
 		return
 	if mode == "track":
-		if erase:
+		if auto_connect:
+			choose_connection_endpoint(pick_endpoint())
+		elif erase:
 			var hit = pick_track()
 			if not hit.is_empty():
 				remove_track(hit.part.uid)
@@ -1181,18 +1328,23 @@ func canvas_click() -> void:
 				toast("道岔已切换至" + ("直股" if hit.part.branch == 0 else "侧股"))
 
 func place_track() -> bool:
-	var paths = graph.make_paths(catalog.tracks[selected_track], placement, placement_yaw, grade, mirror)
+	var paths = graph.make_paths(catalog.tracks[selected_track], placement, placement_yaw, grade, mirror, flex_options)
+	if catalog.tracks[selected_track].kind == "flex":
+		var measured = RailFlexTrack.measure(paths[0], terrain.width, terrain.depth)
+		if not measured.error.is_empty() or RailFlexTrack.self_crosses(paths[0]):
+			toast(measured.error if not measured.error.is_empty() else "柔性轨道不能自交", 7)
+			return false
 	for path in paths:
 		for p in path:
 			if not terrain.contains_point(p, 0.2):
 				toast("轨道超出沙盘范围")
 				return false
 	for old in graph.parts:
-		if Graph.array_v(old.position).distance_to(placement) < 0.02 and absf(angle_difference(old.yaw, placement_yaw)) < 0.02 and old.definition == selected_track and old.get("mirror", false) == mirror:
+		if Graph.array_v(old.position).distance_to(placement) < 0.02 and absf(angle_difference(old.yaw, placement_yaw)) < 0.02 and old.definition == selected_track and old.get("mirror", false) == mirror and old.get("flex", {}) == (RailFlexTrack.settings(catalog.tracks[selected_track], flex_options) if catalog.tracks[selected_track].kind == "flex" else {}):
 			toast("这里已有相同轨道")
 			return false
 	push_undo()
-	graph.add_part(selected_track, placement, placement_yaw, grade, mirror)
+	graph.add_part(selected_track, placement, placement_yaw, grade, mirror, flex_options)
 	rebuild_rails()
 	layout_changed.emit()
 	toast("已铺设 " + catalog.tracks[selected_track].name + (" · 端点已连接" if snapped else ""))
@@ -1465,5 +1617,13 @@ func integration_test() -> void:
 	failures += await derail_test.run(self)
 	var track_placement_test = load("res://tests/track_placement.gd").new()
 	failures += await track_placement_test.run(self)
+	var flex_track_test = load("res://tests/flex_track.gd").new()
+	failures += await flex_track_test.run(self)
 	print("INTEGRATION_RESULT failures=" + str(failures))
+	get_tree().quit(1 if failures > 0 else 0)
+
+func flex_test() -> void:
+	await get_tree().process_frame
+	var test = load("res://tests/flex_track.gd").new()
+	var failures = await test.run(self, "--flex-capture" in OS.get_cmdline_user_args())
 	get_tree().quit(1 if failures > 0 else 0)

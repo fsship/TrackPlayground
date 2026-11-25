@@ -46,6 +46,16 @@ static func validate(data: Dictionary, catalog: RailCatalog) -> String:
 			return "轨道坡度或道岔参数不正确"
 		if catalog.tracks[p.definition].kind != "turnout" and p.get("branch", 0) != 0:
 			return "非道岔零件不能指定侧股"
+		var definition: Dictionary = catalog.tracks[p.definition]
+		if definition.kind == "flex":
+			if not p.get("flex", {}) is Dictionary or not RailFlexTrack.validate_options(definition.shape, p.get("flex", {})):
+				return "柔性轨道参数或控制点不正确"
+			var points = RailGraph.new(catalog).part_paths(p)[0]
+			var measured = RailFlexTrack.measure(points, sandbox.width, sandbox.depth)
+			if not measured.error.is_empty():
+				return "柔性轨道不合法：" + measured.error
+			if RailFlexTrack.self_crosses(points):
+				return "柔性轨道不能自交"
 		uids[p.uid] = true
 		max_part = maxi(max_part, int(p.uid))
 	if not integer(data.get("next_part"), max_part + 1, 10000001):

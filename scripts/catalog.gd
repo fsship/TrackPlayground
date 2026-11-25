@@ -17,7 +17,12 @@ func _init() -> void:
 			{"key":"curve", "name":"30° 标准弯轨", "kind":"curve", "radius_mm":280.0 if n else 430.0, "angle_deg":30.0},
 			{"key":"inner_demo", "name":"30° 内圈弯轨", "kind":"curve", "radius_mm":200.0 if n else 330.0, "angle_deg":30.0},
 			{"key":"wide", "name":"15° 大半径弯轨", "kind":"curve", "radius_mm":350.0 if n else 550.0, "angle_deg":15.0},
-			{"key":"turnout", "name":"18° 左道岔", "kind":"turnout", "length_mm":180.0 if n else 280.0, "radius_mm":500.0 if n else 800.0, "angle_deg":18.0}
+			{"key":"turnout", "name":"18° 左道岔", "kind":"turnout", "length_mm":180.0 if n else 280.0, "radius_mm":500.0 if n else 800.0, "angle_deg":18.0},
+			{"key":"flex_straight", "name":"柔性直轨", "kind":"flex", "shape":"straight", "length_mm":280.0 if n else 460.0},
+			{"key":"flex_arc", "name":"圆弧柔轨", "kind":"flex", "shape":"arc", "radius_mm":350.0 if n else 550.0, "angle_deg":45.0},
+			{"key":"flex_s", "name":"S 形柔轨", "kind":"flex", "shape":"s", "length_mm":420.0 if n else 690.0, "offset_mm":60.0 if n else 100.0},
+			{"key":"flex_transition", "name":"缓和曲线柔轨", "kind":"flex", "shape":"transition", "length_mm":280.0 if n else 460.0, "radius_mm":350.0 if n else 550.0},
+			{"key":"flex_link", "name":"自动连接柔轨", "kind":"flex", "shape":"bezier"}
 		]
 		for p in pieces:
 			p.id = "core:" + scale + ":" + p.key
@@ -97,8 +102,11 @@ func _validate(group: String, item: Dictionary) -> bool:
 	if item.has("color") and (not item.color is String or not Color.html_is_valid(item.color)):
 		return false
 	if group == "tracks":
-		if not SCALES.has(str(item.get("scale", ""))) or not item.get("kind", "") in ["straight", "curve", "turnout"]:
+		if not SCALES.has(str(item.get("scale", ""))) or not item.get("kind", "") in ["straight", "curve", "turnout", "flex"]:
 			return false
+		if item.kind == "flex":
+			if not item.get("shape", "") in ["straight", "arc", "s", "transition"] or not RailFlexTrack.validate_options(item.shape, item):
+				return false
 		if item.kind in ["straight", "turnout"] and not _positive(item, "length_mm", 10, 2000):
 			return false
 		if item.kind in ["curve", "turnout"] and (not _positive(item, "radius_mm", 80, 5000) or not _positive(item, "angle_deg", 1, 90)):

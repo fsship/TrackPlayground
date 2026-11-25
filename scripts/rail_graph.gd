@@ -18,7 +18,15 @@ static func array_v(a: Array) -> Vector3:
 static func v_array(v: Vector3) -> Array:
 	return [v.x, v.y, v.z]
 
-func make_paths(definition: Dictionary, origin: Vector3, yaw: float, grade: float = 0.0, mirror: bool = false) -> Array:
+func make_paths(definition: Dictionary, origin: Vector3, yaw: float, grade: float = 0.0, mirror: bool = false, options: Dictionary = {}) -> Array:
+	if definition.kind == "flex":
+		var points = RailFlexTrack.bake(definition.shape, RailFlexTrack.settings(definition, options), grade)
+		for i in points.size():
+			var p = points[i]
+			if mirror:
+				p.z = -p.z
+			points[i] = origin + p.rotated(Vector3.UP, yaw)
+		return [points]
 	var paths: Array = []
 	var variants = ["straight", "curve"] if definition.kind == "turnout" else [definition.kind]
 	for kind in variants:
@@ -47,8 +55,13 @@ static func placement_endpoints(paths: Array) -> Array:
 		result.append({"position":points[-1], "out":(points[-1] - points[-2]).normalized()})
 	return result
 
-func add_part(definition: String, pos: Vector3, yaw: float, grade: float = 0.0, mirror: bool = false) -> Dictionary:
+func part_paths(part: Dictionary) -> Array:
+	return make_paths(catalog.tracks[part.definition], array_v(part.position), float(part.yaw), float(part.get("grade", 0.0)), bool(part.get("mirror", false)), part.get("flex", {}))
+
+func add_part(definition: String, pos: Vector3, yaw: float, grade: float = 0.0, mirror: bool = false, options: Dictionary = {}) -> Dictionary:
 	var p = {"uid": next_uid, "definition":definition, "position":v_array(pos), "yaw":yaw, "grade":grade, "mirror":mirror, "branch":0}
+	if catalog.tracks[definition].kind == "flex":
+		p.flex = RailFlexTrack.settings(catalog.tracks[definition], options)
 	next_uid += 1
 	parts.append(p)
 	rebuild()
@@ -61,7 +74,7 @@ func rebuild() -> void:
 		var def = catalog.tracks.get(part.definition)
 		if def == null:
 			continue
-		var paths = make_paths(def, array_v(part.position), float(part.yaw), float(part.get("grade", 0.0)), bool(part.get("mirror", false)))
+		var paths = part_paths(part)
 		for branch in paths.size():
 			var pts: PackedVector3Array = paths[branch]
 			var distances = PackedFloat64Array([0.0])
@@ -69,6 +82,8 @@ func rebuild() -> void:
 				distances.append(distances[-1] + pts[i].distance_to(pts[i - 1]))
 			var id = str(int(part.uid)) + ":" + str(branch)
 			edges[id] = {"id":id, "part":part, "branch":branch, "points":pts, "distances":distances, "length":distances[-1], "radius":float(def.get("radius_mm", 0.0)) / 100.0 if branch == 1 or def.kind == "curve" else 0.0}
+			if def.kind == "flex":
+				edges[id].radii = RailFlexTrack.radii(pts)
 	for id in edges:
 		for end in [0, 1]:
 			var key = endpoint_key(id, end)
@@ -113,7 +128,22 @@ func sample(id: String, distance: float, reversed: bool = false) -> Dictionary:
 			hi = mid
 	var t = (d - distances[lo]) / maxf(0.00001, distances[hi] - distances[lo])
 	var tangent: Vector3 = (edge.points[hi] - edge.points[lo]).normalized() * (-1.0 if reversed else 1.0)
-	return {"position":edge.points[lo].lerp(edge.points[hi], t), "tangent":tangent, "radius":edge.radius, "edge":id, "distance":d}
+	var radius: float = edge.radius
+	if edge.has("radii"):
+		# Use local curvature; an S curve's inflection must not hide its bends.
+		var r0: float = edge.radii[lo]
+		var r1: float = edge.radii[hi]
+		radius = maxf(r0, r1) if minf(r0, r1) == 0 else minf(r0, r1)
+	return {"position":edge.points[lo].lerp(edge.points[hi], t), "tangent":tangent, "radius":radius, "edge":id, "distance":d}
+
+func is_open_endpoint(ep: Dictionary) -> bool:
+	return ep.has("edge") and ep.get("end", -1) in [0, 1] and edges.has(ep.edge) and connections.get(endpoint_key(ep.edge, ep.end), [true]).is_empty()
+
+func plan_connection(start: Dictionary, finish: Dictionary, width: float, depth: float, minimum_radius: float) -> Dictionary:
+	if not is_open_endpoint(start) or not is_open_endpoint(finish):
+		return {"error":"请选择尚未连接的开放端点"}
+	# Refresh geometry instead of trusting stale hover/selection dictionaries.
+	return RailFlexTrack.connect_endpoints(endpoint(start.edge, start.end), endpoint(finish.edge, finish.end), width, depth, minimum_radius)
 
 func nearest(pos: Vector3, limit: float = 1.0) -> Dictionary:
 	var best = {}

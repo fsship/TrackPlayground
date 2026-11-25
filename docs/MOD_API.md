@@ -30,9 +30,28 @@
 
 ## 轨道
 
-长度与半径为**实际模型毫米**。`scale` 是 `HO` 或 `N`；要支持两种比例需分别定义。`kind` 支持 `straight`、`curve`、`turnout`。
+长度与半径为**实际模型毫米**。`scale` 是 `HO` 或 `N`；要支持两种比例需分别定义。`kind` 支持 `straight`、`curve`、`turnout`、`flex`。
 
-直轨长度 10–2000 mm，曲线半径 80–5000 mm，转角 1–90°。道岔有共起点的直股与圆弧侧股，界面镜像可改变左右。API v1 提供直线/圆弧几何；任意样条、复式交分道岔或自定义轨道网格需要扩展 `RailGraph.make_paths()` 和 `RailGeometry.track()`。
+固定直轨长度 10–2000 mm，曲线半径 80–5000 mm，转角 1–90°。道岔有共起点的直股与圆弧侧股，界面镜像可改变左右。
+
+柔轨使用 `kind: "flex"`，通过 `shape` 选择形状；每个已放置零件的参数单独保存，不会修改其他同类零件：
+
+```json
+{"id":"flex_s", "name":"柔性 S 轨", "scale":"HO", "kind":"flex", "shape":"s", "length_mm":690, "offset_mm":100}
+```
+
+| shape | 参数 | 范围与含义 |
+| --- | --- | --- |
+| `straight` | `length_mm` | 10–2000 mm，直轨长度 |
+| `arc` | `radius_mm`, `angle_deg` | 80–5000 mm，1–180°，圆弧半径与转角 |
+| `s` | `length_mm`, `offset_mm` | 10–2000 mm 纵向跨度，−1000～1000 mm 横向偏移；两端平行且端部曲率为零 |
+| `transition` | `length_mm`, `radius_mm` | 10–2000 mm 弧长，80–5000 mm 末端半径；欧拉缓和曲线 |
+
+未提供的柔轨参数默认为长度 460 mm、半径 550 mm、角度 45°、偏移 100 mm。界面支持调整、镜像、坡度和两端定位；过小半径、超过 8% 坡度、自交或超出沙盘的曲线无法放置。
+
+自动连接生成内置 `core:HO:flex_link` / `core:N:flex_link`，其 `shape: "bezier"` 保留给连接工具。场景零件的 `flex.controls` 存储四个局部三维控制点，单位为世界单位（100 mm），首点为 `[0,0,0]`；控制点随 `position` / `yaw` / `mirror` 变换。普通柔轨的 `flex` 字段保存各参数覆盖值。场景版本仍为 1，旧存档可以继续载入；包含柔轨的新存档需要此版本程序。
+
+`RailGraph.part_paths(part)` 返回包含柔轨参数的完整路径；`make_paths()` 的第六个参数可传入柔轨参数。`plan_connection(start, finish, width, depth, minimum_radius)` 返回预览曲线或错误，后三项使用世界单位，调用本身不修改图。复式交分道岔或自定义轨道网格仍需扩展代码。
 
 ## 车辆与布景
 
