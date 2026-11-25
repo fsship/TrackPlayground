@@ -1324,6 +1324,8 @@ func canvas_click() -> void:
 			else:
 				push_undo()
 				hit.part.branch = 1 - int(hit.part.get("branch", 0))
+				for train in simulation.trains:
+					simulation.refresh_route(train)
 				rebuild_rails()
 				toast("道岔已切换至" + ("直股" if hit.part.branch == 0 else "侧股"))
 
@@ -1570,6 +1572,8 @@ func apply_snapshot(data: Dictionary) -> bool:
 	for item in data.scenery:
 		add_scenery(item.definition, Graph.array_v(item.position), float(item.get("yaw", 0)))
 	simulation.trains = data.trains.duplicate(true)
+	for train in simulation.trains:
+		simulation.refresh_route(train)
 	simulation.next_uid = int(data.get("next_train", 1))
 	simulation.paused = true
 	simulation.wet_rails = data.get("physics", {}).get("wet", false)
@@ -1611,6 +1615,8 @@ func integration_test() -> void:
 		return
 	var test = script.new()
 	var failures = test.run(self)
+	var turnout_test = load("res://tests/turnout_routing.gd").new()
+	failures += turnout_test.run(self)
 	var placement_test = load("res://tests/train_placement.gd").new()
 	failures += await placement_test.run(self)
 	var derail_test = load("res://tests/derailment.gd").new()

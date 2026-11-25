@@ -92,6 +92,7 @@ func route_length(train: Dictionary) -> float:
 	return length
 
 func ensure_route(train: Dictionary) -> void:
+	refresh_route(train)
 	var needed = consist_length(train.cars) + 3.0
 	var count = 0
 	while train.s < needed and count < 200:
@@ -116,6 +117,32 @@ func ensure_route(train: Dictionary) -> void:
 		train.s -= graph.edges[train.route.pop_front().edge].length
 	while train.route.size() > 160 and route_length(train) - train.s > graph.edges[train.route[-1].edge].length + 5.0:
 		train.route.pop_back()
+
+func refresh_route(train: Dictionary) -> void:
+	if train.has("derailed_cars"):
+		return
+	# Saved routes and reversing can leave many unoccupied entries on either
+	# side of a train. Recheck facing turnouts there, but never change the path
+	# beneath any vehicle (including a trailing move through a different branch).
+	var tail = train.s - consist_length(train.cars)
+	var base = 0.0
+	var cut_front = 0
+	var cut_back = train.route.size()
+	var subtract = 0.0
+	for i in train.route.size():
+		var entry: Dictionary = train.route[i]
+		var edge: Dictionary = graph.edges[entry.edge]
+		var end: float = base + edge.length
+		if catalog.tracks[edge.part.definition].kind == "turnout" and int(edge.branch) != int(edge.part.get("branch", 0)):
+			if entry.rev and end <= tail and i + 1 < train.route.size():
+				cut_front = i + 1
+				subtract = end
+			elif not entry.rev and base >= train.s and i > 0:
+				cut_back = mini(cut_back, i)
+		base = end
+	if cut_front > 0 or cut_back < train.route.size():
+		train.route = train.route.slice(cut_front, cut_back)
+		train.s -= subtract
 
 func sample_route(train: Dictionary, s: float, extrapolate: bool = false) -> Dictionary:
 	var d = s
