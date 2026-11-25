@@ -39,6 +39,14 @@ func make_paths(definition: Dictionary, origin: Vector3, yaw: float, grade: floa
 		paths.append(pts)
 	return paths
 
+static func placement_endpoints(paths: Array) -> Array:
+	# All generated paths share their starting point, including turnouts.
+	var first: PackedVector3Array = paths[0]
+	var result = [{"position":first[0], "out":(first[0] - first[1]).normalized()}]
+	for points in paths:
+		result.append({"position":points[-1], "out":(points[-1] - points[-2]).normalized()})
+	return result
+
 func add_part(definition: String, pos: Vector3, yaw: float, grade: float = 0.0, mirror: bool = false) -> Dictionary:
 	var p = {"uid": next_uid, "definition":definition, "position":v_array(pos), "yaw":yaw, "grade":grade, "mirror":mirror, "branch":0}
 	next_uid += 1

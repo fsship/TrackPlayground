@@ -15,6 +15,7 @@ const MUTED = Color("91a5ac")
 const TRAIN_PREVIEW_VALID = Color(0.15, 0.55, 1.0, 0.42)
 const TRAIN_PREVIEW_INVALID = Color(1.0, 0.18, 0.16, 0.42)
 const OPERATE_HINT = "点击列车选中 · 点击道岔切换 · 空格暂停 · 右键旋转 / 中键平移 / 滚轮缩放"
+const TRACK_HINT = "Tab 切换端点 · 左键铺轨 · R 旋转 15° · F 镜像 · Esc 取消 · Ctrl+Z 撤销"
 var catalog: RailCatalog
 var graph: RailGraph
 var simulation: RailSimulation
@@ -39,6 +40,7 @@ var camera_distance = 33.0
 var follow_train = false
 var mode = "operate"
 var selected_track = "core:HO:straight"
+var track_placement_endpoint = 0
 var selected_scenery = "core:tree"
 var selected_train = 1
 var yaw = 0.0
@@ -483,6 +485,7 @@ func clear_children(node: Node) -> void:
 func set_mode(value: String) -> void:
 	mode = value
 	placing_train = false
+	track_placement_endpoint = 0
 	erase = false
 	preview_key = ""
 	if preview:
@@ -523,7 +526,7 @@ func set_mode(value: String) -> void:
 	left_body.add_child(scale_picker)
 	button(left_body, "载入示例布局", func(): confirm("载入 3.4 × 2.6 m 示例布局？当前编辑可以撤销。", func(): push_undo(); make_demo()))
 	button(left_body, "新建空白沙盘", show_new_scene)
-	var hints = {"operate":OPERATE_HINT, "track":"左键铺轨 · 端点自动吸附 · R 旋转 15° · F 镜像 · Esc 取消工具 · Ctrl+Z 撤销", "terrain":"按住左键刷地形 · Ctrl+Z 撤销整次笔刷 · 轨道高程独立，填挖地形后可手动整平路基", "scenery":"左键放置布景 · R 旋转 · 橡皮擦删除 · 右键旋转视角 / 中键平移"}
+	var hints = {"operate":OPERATE_HINT, "track":track_placement_hint(), "terrain":"按住左键刷地形 · Ctrl+Z 撤销整次笔刷 · 轨道高程独立，填挖地形后可手动整平路基", "scenery":"左键放置布景 · R 旋转 · 橡皮擦删除 · 右键旋转视角 / 中键平移"}
 	status_label.text = hints[mode]
 	responsive_layout()
 
@@ -535,14 +538,15 @@ func build_track_ui() -> void:
 			caption += "  ·  %d mm" % def.length_mm
 		else:
 			caption += "  ·  R%d" % def.radius_mm
-		var b = button(left_body, caption, func(): selected_track = def.id; erase = false; preview_key = ""; toast("已选中 " + def.name))
+		var b = button(left_body, caption, func(): selected_track = def.id; track_placement_endpoint = 0; erase = false; preview_key = ""; update_preview(); toast("已选中 " + def.name))
 		b.tooltip_text = def.source + " / " + def.id
 	separator(left_body)
 	var r = HBoxContainer.new()
 	left_body.add_child(r)
 	button(r, "旋转 15°", func(): yaw += PI / 12; preview_key = "")
 	button(r, "镜像 F", func(): mirror = not mirror; preview_key = "")
-	label(left_body, "起点高程 / 模型毫米", 12, MUTED)
+	button(left_body, "切换端点 Tab", cycle_track_endpoint)
+	label(left_body, "放置端点高程 / 模型毫米", 12, MUTED)
 	spin(left_body, -60, 400, 1, placement_height * 100, func(v): placement_height = v / 100; preview_key = "")
 	label(left_body, "线路坡度 / %", 12, MUTED)
 	spin(left_body, -8, 8, 0.1, grade * 100, func(v): grade = v / 100; preview_key = "")
@@ -550,6 +554,15 @@ func build_track_ui() -> void:
 	button(left_body, "整平全部轨道路基", conform_terrain)
 	var tip = label(left_body, "道岔在行车模式中点击切换。占用中的轨道和道岔会锁定。", 12, MUTED)
 	tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+
+func track_placement_hint() -> String:
+	var names = ["入口", "直股端", "侧股端"] if catalog.tracks[selected_track].kind == "turnout" else ["起点", "终点"]
+	return "当前端点：" + names[track_placement_endpoint % names.size()] + " · " + TRACK_HINT
+
+func cycle_track_endpoint() -> void:
+	var count = 3 if catalog.tracks[selected_track].kind == "turnout" else 2
+	track_placement_endpoint = (track_placement_endpoint + 1) % count
+	update_preview()
 
 func spin(parent: Node, low: float, high: float, step_value: float, value: float, callback: Callable) -> SpinBox:
 	var control = SpinBox.new()
@@ -935,10 +948,18 @@ func update_preview() -> void:
 		preview.visible = false
 	if placing_train:
 		status_label.text = "悬浮轨道预览编组 · 蓝色可放置 / 红色不可放置 · Tab 切换方向 · Esc 取消"
+	elif mode == "track" and not erase:
+		status_label.text = track_placement_hint()
 	if not over_canvas():
 		return
 	if mode == "operate" and placing_train:
 		update_train_preview(pick_track())
+		return
+	if mode == "track" and not erase:
+		var snap = pick_endpoint()
+		var hit: Vector3 = mouse_world() if snap.is_empty() else snap.position
+		if hit.is_finite():
+			update_track_preview(hit, snap)
 		return
 	var hit = mouse_world()
 	if not hit.is_finite():
@@ -951,26 +972,6 @@ func update_preview() -> void:
 		brush_ring.position = hit + Vector3.UP * 0.08
 		brush_ring.scale = Vector3(brush_radius, 0.2, brush_radius)
 		brush_ring.visible = true
-	elif mode == "track" and not erase:
-		var snap = pick_endpoint()
-		if not snap.is_empty():
-			placement = snap.position
-			placement_yaw = atan2(-snap.out.z, snap.out.x)
-			snapped = true
-		else:
-			placement = Vector3(snappedf(hit.x, 0.05), placement_height, snappedf(hit.z, 0.05))
-		var key = selected_track + str(mirror) + str(grade)
-		if key != preview_key or preview == null:
-			if preview:
-				preview.queue_free()
-			preview = Geometry.track(graph.make_paths(catalog.tracks[selected_track], Vector3.ZERO, 0, grade, mirror), RailCatalog.SCALES[graph.scale_name].gauge_mm / 100, true)
-			add_child(preview)
-			preview_key = key
-		preview.position = placement + Vector3.UP * 0.012
-		preview.rotation.y = placement_yaw
-		preview.visible = true
-		marker.position = placement + Vector3.UP * 0.10
-		marker.visible = snapped
 	elif mode == "scenery" and not erase:
 		if selected_scenery != preview_key or preview == null:
 			if preview:
@@ -984,6 +985,34 @@ func update_preview() -> void:
 	elif erase:
 		marker.position = hit + Vector3.UP * 0.1
 		marker.visible = true
+
+func update_track_preview(hit: Vector3, snap: Dictionary) -> void:
+	var paths = graph.make_paths(catalog.tracks[selected_track], Vector3.ZERO, 0, grade, mirror)
+	var endpoints = Graph.placement_endpoints(paths)
+	track_placement_endpoint %= endpoints.size()
+	var endpoint: Dictionary = endpoints[track_placement_endpoint]
+	var anchor = Vector3(snappedf(hit.x, 0.05), placement_height, snappedf(hit.z, 0.05))
+	placement_yaw = yaw
+	snapped = not snap.is_empty()
+	if snapped:
+		anchor = snap.position
+		# Selected endpoint faces into the existing rail; the entire piece rotates
+		# around that endpoint, including a turnout's curved exit.
+		placement_yaw = atan2(snap.out.z, -snap.out.x) - atan2(-endpoint.out.z, endpoint.out.x)
+	placement = anchor - endpoint.position.rotated(Vector3.UP, placement_yaw)
+	valid_placement = true
+	var key = selected_track + str(mirror) + str(grade)
+	if key != preview_key or preview == null:
+		if preview:
+			preview.queue_free()
+		preview = Geometry.track(paths, RailCatalog.SCALES[graph.scale_name].gauge_mm / 100, true)
+		add_child(preview)
+		preview_key = key
+	preview.position = placement + Vector3.UP * 0.012
+	preview.rotation.y = placement_yaw
+	preview.visible = true
+	marker.position = anchor + Vector3.UP * 0.10
+	marker.visible = true
 
 func update_train_preview(hit: Dictionary) -> void:
 	valid_placement = false
@@ -1067,14 +1096,17 @@ func _unhandled_input(event: InputEvent) -> void:
 			capture_frame()
 
 func _input(event: InputEvent) -> void:
-	# Handle Tab before GUI focus navigation consumes it (the placement button
-	# may still have focus). Keep normal Tab navigation in dialogs and editors.
-	if event is InputEventKey and event.keycode == KEY_TAB and placing_train and mode == "operate":
+	# Handle Tab before GUI focus navigation consumes it. Keep normal Tab
+	# navigation in dialogs, editors and tools that do not use placement anchors.
+	if event is InputEventKey and event.keycode == KEY_TAB and ((placing_train and mode == "operate") or (mode == "track" and not erase)):
 		var focus = get_viewport().gui_get_focus_owner()
 		if not file_dialog.visible and not mod_dialog.visible and not confirm_dialog.visible and not new_scene_dialog.visible and not (focus is LineEdit or focus is TextEdit):
 			if event.pressed and not event.echo:
-				train_placement_reversed = not train_placement_reversed
-				update_preview()
+				if mode == "track":
+					cycle_track_endpoint()
+				else:
+					train_placement_reversed = not train_placement_reversed
+					update_preview()
 			get_viewport().set_input_as_handled()
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
 		brush_active = false
@@ -1431,5 +1463,7 @@ func integration_test() -> void:
 	failures += await placement_test.run(self)
 	var derail_test = load("res://tests/derailment.gd").new()
 	failures += await derail_test.run(self)
+	var track_placement_test = load("res://tests/track_placement.gd").new()
+	failures += await track_placement_test.run(self)
 	print("INTEGRATION_RESULT failures=" + str(failures))
 	get_tree().quit(1 if failures > 0 else 0)
