@@ -12,6 +12,9 @@ const Derailment = preload("res://scripts/derailment.gd")
 const AMBER = Color("e9b56b")
 const MINT = Color("78dcc1")
 const MUTED = Color("91a5ac")
+const TRAIN_PREVIEW_VALID = Color(0.15, 0.55, 1.0, 0.42)
+const TRAIN_PREVIEW_INVALID = Color(1.0, 0.18, 0.16, 0.42)
+const OPERATE_HINT = "点击列车选中 · 点击道岔切换 · 空格暂停 · 右键旋转 / 中键平移 / 滚轮缩放"
 var catalog: RailCatalog
 var graph: RailGraph
 var simulation: RailSimulation
@@ -55,6 +58,8 @@ var brush_active = false
 var preview_key = ""
 var draft_cars: Array = ["core:diesel", "core:coach", "core:coach"]
 var placing_train = false
+var train_placement_reversed = false
+var train_preview_material: StandardMaterial3D
 var undo_stack: Array = []
 var redo_stack: Array = []
 var ui: Control
@@ -518,7 +523,7 @@ func set_mode(value: String) -> void:
 	left_body.add_child(scale_picker)
 	button(left_body, "载入示例布局", func(): confirm("载入 3.4 × 2.6 m 示例布局？当前编辑可以撤销。", func(): push_undo(); make_demo()))
 	button(left_body, "新建空白沙盘", show_new_scene)
-	var hints = {"operate":"点击列车选中 · 点击道岔切换 · 空格暂停 · 右键旋转 / 中键平移 / 滚轮缩放", "track":"左键铺轨 · 端点自动吸附 · R 旋转 15° · F 镜像 · Esc 取消工具 · Ctrl+Z 撤销", "terrain":"按住左键刷地形 · Ctrl+Z 撤销整次笔刷 · 轨道高程独立，填挖地形后可手动整平路基", "scenery":"左键放置布景 · R 旋转 · 橡皮擦删除 · 右键旋转视角 / 中键平移"}
+	var hints = {"operate":OPERATE_HINT, "track":"左键铺轨 · 端点自动吸附 · R 旋转 15° · F 镜像 · Esc 取消工具 · Ctrl+Z 撤销", "terrain":"按住左键刷地形 · Ctrl+Z 撤销整次笔刷 · 轨道高程独立，填挖地形后可手动整平路基", "scenery":"左键放置布景 · R 旋转 · 橡皮擦删除 · 右键旋转视角 / 中键平移"}
 	status_label.text = hints[mode]
 	responsive_layout()
 
@@ -597,10 +602,7 @@ func build_train_ui() -> void:
 	left_body.add_child(row)
 	button(row, "移除末辆", func(): if not draft_cars.is_empty(): draft_cars.pop_back(); update_draft())
 	button(row, "清空", func(): draft_cars.clear(); update_draft())
-	button(left_body, "将编组放上轨道 →", func():
-		placing_train = true
-		toast("点击轨道指定机车前端位置；后方需有足够的空闲轨道。", 7)
-	)
+	button(left_body, "将编组放上轨道 →", begin_train_placement)
 	button(left_body, "用草稿替换选中编组", replace_consist)
 	separator(left_body)
 	label(left_body, "物理环境", 14, AMBER)
@@ -624,6 +626,12 @@ func update_draft() -> void:
 	for i in draft_cars.size():
 		names.append("%02d  %s" % [i + 1, catalog.vehicles[draft_cars[i]].name])
 	draft_label.text = "\n".join(names) + "\n\n%d 辆 · 模型长度 %.0f mm" % [draft_cars.size(), simulation.consist_length(draft_cars) * 100]
+
+func begin_train_placement() -> void:
+	placing_train = true
+	train_placement_reversed = false
+	update_preview()
+	toast("蓝色虚影可放置，红色表示不可放置；Tab 切换方向，Esc 取消。", 7)
 
 func make_demo() -> void:
 	empty_scene(false)
@@ -925,7 +933,12 @@ func update_preview() -> void:
 	brush_ring.visible = false
 	if preview:
 		preview.visible = false
+	if placing_train:
+		status_label.text = "悬浮轨道预览编组 · 蓝色可放置 / 红色不可放置 · Tab 切换方向 · Esc 取消"
 	if not over_canvas():
+		return
+	if mode == "operate" and placing_train:
+		update_train_preview(pick_track())
 		return
 	var hit = mouse_world()
 	if not hit.is_finite():
@@ -968,9 +981,45 @@ func update_preview() -> void:
 		preview.position = placement
 		preview.rotation.y = yaw
 		preview.visible = true
-	elif placing_train or erase:
+	elif erase:
 		marker.position = hit + Vector3.UP * 0.1
 		marker.visible = true
+
+func update_train_preview(hit: Dictionary) -> void:
+	valid_placement = false
+	if preview:
+		preview.visible = false
+	if hit.is_empty():
+		return
+	var result = simulation.train_placement(draft_cars, hit.edge, hit.distance, train_placement_reversed)
+	valid_placement = result.error.is_empty()
+	status_label.text = ("可放置 · 左键确认" if valid_placement else result.error) + " · Tab 切换方向 · Esc 取消"
+	if result.train.is_empty():
+		return
+	var key = "train:" + graph.scale_name + ":" + str(draft_cars)
+	if preview == null or preview_key != key:
+		if preview:
+			preview.queue_free()
+		preview = Node3D.new()
+		train_preview_material = StandardMaterial3D.new()
+		train_preview_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		train_preview_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		for id in draft_cars:
+			var node = Geometry.vehicle(catalog.vehicles[id], simulation.ratio())
+			Geometry.apply_preview_material(node, train_preview_material)
+			preview.add_child(node)
+		add_child(preview)
+		preview_key = key
+	train_preview_material.albedo_color = TRAIN_PREVIEW_VALID if valid_placement else TRAIN_PREVIEW_INVALID
+	var samples = simulation.car_samples(result.train, true)
+	for i in samples.size():
+		var sample = samples[i]
+		var tangent: Vector3 = sample.tangent
+		var side = tangent.cross(Vector3.UP).normalized()
+		var node: Node3D = preview.get_child(i)
+		node.basis = Basis(tangent, side.cross(tangent).normalized(), side)
+		node.position = sample.position + Vector3.UP * 0.08
+	preview.visible = true
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
@@ -1018,6 +1067,15 @@ func _unhandled_input(event: InputEvent) -> void:
 			capture_frame()
 
 func _input(event: InputEvent) -> void:
+	# Handle Tab before GUI focus navigation consumes it (the placement button
+	# may still have focus). Keep normal Tab navigation in dialogs and editors.
+	if event is InputEventKey and event.keycode == KEY_TAB and placing_train and mode == "operate":
+		var focus = get_viewport().gui_get_focus_owner()
+		if not file_dialog.visible and not mod_dialog.visible and not confirm_dialog.visible and not new_scene_dialog.visible and not (focus is LineEdit or focus is TextEdit):
+			if event.pressed and not event.echo:
+				train_placement_reversed = not train_placement_reversed
+				update_preview()
+			get_viewport().set_input_as_handled()
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
 		brush_active = false
 
@@ -1058,13 +1116,19 @@ func canvas_click() -> void:
 		if hit.is_empty():
 			return
 		if placing_train:
+			var result = simulation.train_placement(draft_cars, hit.edge, hit.distance, train_placement_reversed)
+			if not result.error.is_empty():
+				toast("无法放置：" + result.error, 7)
+				return
 			push_undo()
-			var t = simulation.add_train(draft_cars, hit.edge, hit.distance)
+			var t = simulation.add_train(draft_cars, hit.edge, hit.distance, "", train_placement_reversed)
 			if t.is_empty():
 				toast("无法放置：编组需要机车、足够的后方轨道，且不能与已有列车重叠。", 7)
 			else:
 				selected_train = t.id
 				placing_train = false
+				update_preview()
+				status_label.text = OPERATE_HINT
 				refresh_train_list()
 				refresh_stats()
 				toast("编组已就位，使用右侧滑块调速。")
@@ -1363,6 +1427,8 @@ func integration_test() -> void:
 		return
 	var test = script.new()
 	var failures = test.run(self)
+	var placement_test = load("res://tests/train_placement.gd").new()
+	failures += await placement_test.run(self)
 	var derail_test = load("res://tests/derailment.gd").new()
 	failures += await derail_test.run(self)
 	print("INTEGRATION_RESULT failures=" + str(failures))

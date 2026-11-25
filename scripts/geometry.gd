@@ -152,6 +152,15 @@ static func vehicle(def: Dictionary, ratio: float) -> Node3D:
 		box(root, Vector3(f * 0.65, h * 0.07, w * 0.18), Vector3(l * x, h * 0.22, 0), black)
 	return root
 
+static func apply_preview_material(node: Node, mat: Material) -> void:
+	# Includes nested meshes in imported GLB vehicles without changing their
+	# shared mesh resources or the materials on real trains.
+	if node is GeometryInstance3D:
+		node.material_override = mat
+		node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	for child in node.get_children():
+		apply_preview_material(child, mat)
+
 static func scenery_model(def: Dictionary, ratio: float) -> Node3D:
 	var root = Node3D.new()
 	var custom = custom_model(def, 10.0 / ratio)

@@ -29,27 +29,56 @@ func consist_length(cars: Array) -> float:
 		length += vehicle_length(id)
 	return length
 
-func add_train(cars: Array, edge: String, distance: float, title: String = "") -> Dictionary:
-	if cars.is_empty() or cars.size() > 24 or trains.size() >= 64 or not graph.edges.has(edge):
-		return {}
+func train_placement(cars: Array, edge: String, distance: float, reversed: bool = false, title: String = "") -> Dictionary:
+	# Build and validate without changing trains, IDs or emitting signals. The
+	# hover preview and the final click must use exactly the same placement rules.
+	var result = {"train":{}, "error":""}
+	if cars.is_empty():
+		result.error = "请先向编组添加车辆"
+		return result
+	if not graph.edges.has(edge) or not is_finite(distance):
+		result.error = "请将鼠标移到轨道上"
+		return result
 	for id in cars:
 		if not catalog.vehicles.has(id):
-			return {}
-	if not cars.any(func(id): return catalog.vehicles[id].kind == "locomotive"):
-		return {}
-	var train = {"id":next_uid, "name":title if not title.is_empty() else "编组 %02d" % next_uid, "cars":cars.duplicate(), "route":[{"edge":edge, "rev":false}], "s":distance, "velocity":0.0, "target":0.0, "direction":1, "state":"就绪", "fault":false, "traction":0.0, "braking":0.0, "grade":0.0, "distance_m":0.0}
+			result.error = "编组中有不可用的车辆"
+			return result
+	var s = clampf(distance, 0.0, graph.edges[edge].length)
+	if reversed:
+		s = graph.edges[edge].length - s
+	var train = {"id":next_uid, "name":title if not title.is_empty() else "编组 %02d" % next_uid, "cars":cars.duplicate(), "route":[{"edge":edge, "rev":reversed}], "s":s, "velocity":0.0, "target":0.0, "direction":1, "state":"就绪", "fault":false, "traction":0.0, "braking":0.0, "grade":0.0, "distance_m":0.0}
 	ensure_route(train)
+	result.train = train
+	if cars.size() > 24:
+		result.error = "每个编组最多 24 辆车辆"
+		return result
+	if trains.size() >= 64:
+		result.error = "场景最多容纳 64 个编组"
+		return result
+	if not cars.any(func(id): return catalog.vehicles[id].kind == "locomotive"):
+		result.error = "编组至少需要一辆机车"
+		return result
 	if train.s < consist_length(cars) + 0.04:
-		return {}
+		result.error = "车尾方向的轨道长度不足"
+		return result
 	var occupied = occupancy(train)
 	for intervals in occupied.values():
 		for i in intervals.size():
 			for j in range(i + 1, intervals.size()):
 				if minf(intervals[i].y, intervals[j].y) > maxf(intervals[i].x, intervals[j].x) + 0.005:
-					return {}
+					result.error = "编组过长，在环线上与自身重叠"
+					return result
 	for existing in trains:
 		if overlaps(train, existing):
-			return {}
+			result.error = "放置位置与已有列车重叠"
+			return result
+	return result
+
+func add_train(cars: Array, edge: String, distance: float, title: String = "", reversed: bool = false) -> Dictionary:
+	var result = train_placement(cars, edge, distance, reversed, title)
+	if not result.error.is_empty():
+		return {}
+	var train: Dictionary = result.train
 	next_uid += 1
 	trains.append(train)
 	train_added.emit(train)
@@ -88,17 +117,20 @@ func ensure_route(train: Dictionary) -> void:
 	while train.route.size() > 160 and route_length(train) - train.s > graph.edges[train.route[-1].edge].length + 5.0:
 		train.route.pop_back()
 
-func sample_route(train: Dictionary, s: float) -> Dictionary:
+func sample_route(train: Dictionary, s: float, extrapolate: bool = false) -> Dictionary:
 	var d = s
 	for entry in train.route:
 		var length: float = graph.edges[entry.edge].length
 		if d <= length:
-			return graph.sample(entry.edge, d, entry.rev)
+			var sample = graph.sample(entry.edge, d, entry.rev)
+			if extrapolate and d < 0.0:
+				sample.position += sample.tangent * d
+			return sample
 		d -= length
 	var last: Dictionary = train.route[-1]
 	return graph.sample(last.edge, graph.edges[last.edge].length, last.rev)
 
-func car_samples(train: Dictionary) -> Array:
+func car_samples(train: Dictionary, extrapolate: bool = false) -> Array:
 	var result = []
 	if train.has("derailed_cars"):
 		for i in train.cars.size():
@@ -109,9 +141,11 @@ func car_samples(train: Dictionary) -> Array:
 	var offset = 0.0
 	for id in train.cars:
 		var length = vehicle_length(id)
-		var center = sample_route(train, train.s - offset - length * 0.5)
-		var front = sample_route(train, train.s - offset - length * 0.18)
-		var back = sample_route(train, train.s - offset - length * 0.82)
+		# Invalid placement previews extend beyond a dead end instead of piling
+		# every car up at the endpoint. Running trains keep the clamped behavior.
+		var center = sample_route(train, train.s - offset - length * 0.5, extrapolate)
+		var front = sample_route(train, train.s - offset - length * 0.18, extrapolate)
+		var back = sample_route(train, train.s - offset - length * 0.82, extrapolate)
 		center.tangent = (front.position - back.position).normalized()
 		center.position = (front.position + back.position) * 0.5
 		center.vehicle = id
