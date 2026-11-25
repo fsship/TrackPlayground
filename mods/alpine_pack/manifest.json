@@ -1,0 +1,18 @@
+{
+  "api_version": 1,
+  "id": "alpine",
+  "name": "山地铁路示例包",
+  "version": "1.0.0",
+  "tracks": [
+    {"id": "ho_long", "name": "Mod · 460 mm 长直轨", "scale": "HO", "kind": "straight", "length_mm": 460},
+    {"id": "n_long", "name": "Mod · 280 mm 长直轨", "scale": "N", "kind": "straight", "length_mm": 280},
+    {"id": "ho_curve", "name": "Mod · 15° 缓弯", "scale": "HO", "kind": "curve", "radius_mm": 650, "angle_deg": 15}
+  ],
+  "vehicles": [
+    {"id": "mountain_diesel", "name": "Mod · 山地柴油机车", "kind": "locomotive", "length_m": 15.2, "width_m": 2.9, "height_m": 4.0, "mass_kg": 76000, "power_w": 1400000, "tractive_n": 210000, "max_kmh": 80, "color": "638c6a"}
+  ],
+  "scenery": [
+    {"id": "spruce", "name": "Mod · 深色云杉", "kind": "tree", "color": "2f5954"},
+    {"id": "water_tower", "name": "Mod · GLB 水塔", "kind": "custom", "model": "water_tower.glb", "model_scale": 1.0}
+  ]
+}

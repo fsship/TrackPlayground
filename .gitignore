@@ -1,0 +1,15 @@
+.godot/
+*.log
+build/
+screenshots/
+test-results/
+*.tmp
+.runtime/
+export_templates/
+feature_profiles/
+script_templates/
+text_editor_themes/
+
+# Local launcher and bundled engine binaries
+/TrackPlayground.exe
+/runtime/Godot.exe
