@@ -10,6 +10,9 @@ feature_profiles/
 script_templates/
 text_editor_themes/
 
+# Local editor settings
+/.vscode/
+
 # Local launcher and bundled engine binaries
 /TrackPlayground.exe
 /runtime/Godot.exe
