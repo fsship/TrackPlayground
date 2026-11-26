@@ -237,6 +237,7 @@ func test_physics(catalog) -> void:
 		wet.tick(1.0 / 60.0)
 	check(c.velocity > d.velocity + 0.2, "湿轨降低牵引黏着上限")
 	var collision = RailSimulation.new(straight_graph(catalog), catalog)
+	collision.collision_physics = false
 	var lead = collision.add_train(["core:diesel"], "9:0", 1.5)
 	var rear = collision.add_train(["core:diesel"], "6:0", 1.5)
 	rear.target = 70

@@ -22,6 +22,7 @@ func sync(sim: RailSimulation) -> void:
 		if not consists.has(train.id):
 			create_consist(sim, train)
 		var rig: Dictionary = consists[train.id]
+		var before = sim.Collisions.boxes(sim, train) if sim.collision_physics and not sim.paused else []
 		for i in rig.bodies.size():
 			var body: RigidBody3D = rig.bodies[i]
 			if body.freeze != sim.paused:
@@ -34,6 +35,20 @@ func sync(sim: RailSimulation) -> void:
 					body.sleeping = train.derailed_cars[i].sleeping
 			if not sim.paused:
 				store_car(train.derailed_cars[i], body, rig.heights[i])
+		if not before.is_empty():
+			var after = sim.Collisions.boxes(sim, train)
+			var fraction = sim.collide_moving_wreck(before, after)
+			if fraction >= 0.0:
+				# Rewind the measured sweep to first contact, so the newly released
+				# train receives a real solver impulse even if the wreck crossed it
+				# completely within one physics frame. Preserve current momentum.
+				var contact = sim.Collisions.interpolate_cars(before, after, fraction)
+				for i in rig.bodies.size():
+					var body: RigidBody3D = rig.bodies[i]
+					body.basis = contact[i].basis
+					body.position = contact[i].center
+					body.sleeping = false
+					store_car(train.derailed_cars[i], body, rig.heights[i])
 		train.velocity = RailGraph.array_v(train.derailed_cars[0].linear).length() * sim.ratio() / 10.0
 	for id in consists.keys():
 		if not active.has(id):

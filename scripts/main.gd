@@ -144,6 +144,8 @@ func _ready() -> void:
 		call_deferred("vehicles_test")
 	if "--connections-test" in OS.get_cmdline_user_args():
 		call_deferred("connections_test")
+	if "--collisions-test" in OS.get_cmdline_user_args():
+		call_deferred("collisions_test")
 	if "--audio-test" in OS.get_cmdline_user_args():
 		call_deferred("audio_test")
 	if "--capture" in OS.get_cmdline_user_args():
@@ -743,6 +745,12 @@ func build_train_ui() -> void:
 	derails.button_pressed = simulation.derailments
 	derails.toggled.connect(func(v): simulation.derailments = v)
 	left_body.add_child(derails)
+	var collisions = CheckButton.new()
+	collisions.text = "车辆碰撞物理"
+	collisions.tooltip_text = "碰撞时模拟惯性、反弹和翻滚；关闭后接触停车。此设置独立于脱轨保护。"
+	collisions.button_pressed = simulation.collision_physics
+	collisions.toggled.connect(func(v): simulation.collision_physics = v)
+	left_body.add_child(collisions)
 	var note = label(left_body, "保护开启：弯道超速、轨道尽头停车。关闭后，列车会冲出轨道尽头并坠落；可在右侧复位上轨。换向前请停车。", 12, MUTED)
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 
@@ -1025,6 +1033,8 @@ func update_ui() -> void:
 
 func _physics_process(dt: float) -> void:
 	if simulation:
+		# Read the latest wreck transforms before testing on-rail contacts.
+		derailment.sync(simulation)
 		simulation.tick(dt)
 		derailment.sync(simulation)
 
@@ -1576,7 +1586,7 @@ func show_mods() -> void:
 	mod_dialog.popup_centered()
 
 func snapshot() -> Dictionary:
-	return {"format":"track-playground", "version":1, "scale":graph.scale_name, "sandbox":{"width":terrain.width,"depth":terrain.depth}, "parts":graph.parts.duplicate(true), "next_part":graph.next_uid, "scenery":scenery_items.duplicate(true), "terrain":Array(terrain.heights), "paint":Array(terrain.paints), "trains":simulation.trains.duplicate(true), "next_train":simulation.next_uid, "physics":{"wet":simulation.wet_rails,"derailments":simulation.derailments}, "camera":{"target":Graph.v_array(camera_target),"yaw":camera_yaw,"pitch":camera_pitch,"distance":camera_distance}, "required_mods":catalog.packages.map(func(p): return p.id)}
+	return {"format":"track-playground", "version":1, "scale":graph.scale_name, "sandbox":{"width":terrain.width,"depth":terrain.depth}, "parts":graph.parts.duplicate(true), "next_part":graph.next_uid, "scenery":scenery_items.duplicate(true), "terrain":Array(terrain.heights), "paint":Array(terrain.paints), "trains":simulation.trains.duplicate(true), "next_train":simulation.next_uid, "physics":{"wet":simulation.wet_rails,"derailments":simulation.derailments,"collisions":simulation.collision_physics}, "camera":{"target":Graph.v_array(camera_target),"yaw":camera_yaw,"pitch":camera_pitch,"distance":camera_distance}, "required_mods":catalog.packages.map(func(p): return p.id)}
 
 func push_undo() -> void:
 	undo_stack.append(snapshot())
@@ -1688,6 +1698,7 @@ func apply_snapshot(data: Dictionary) -> bool:
 	simulation.paused = true
 	simulation.wet_rails = data.get("physics", {}).get("wet", false)
 	simulation.derailments = data.get("physics", {}).get("derailments", true)
+	simulation.collision_physics = data.get("physics", {}).get("collisions", true)
 	selected_train = simulation.trains[0].id if not simulation.trains.is_empty() else -1
 	var cam = data.get("camera", {})
 	camera_target = Graph.array_v(cam.get("target", [0,0,0]))
@@ -1731,6 +1742,8 @@ func integration_test() -> void:
 	failures += await placement_test.run(self)
 	var derail_test = load("res://tests/derailment.gd").new()
 	failures += await derail_test.run(self)
+	var collision_test = load("res://tests/vehicle_collisions.gd").new()
+	failures += await collision_test.run(self)
 	var track_placement_test = load("res://tests/track_placement.gd").new()
 	failures += await track_placement_test.run(self)
 	var flex_track_test = load("res://tests/flex_track.gd").new()
@@ -1756,6 +1769,12 @@ func steam_test() -> void:
 	await get_tree().process_frame
 	var test = load("res://tests/steam_locomotive.gd").new()
 	var failures = await test.run(self, "--steam-capture" in OS.get_cmdline_user_args())
+	get_tree().quit(1 if failures > 0 else 0)
+
+func collisions_test() -> void:
+	await get_tree().process_frame
+	var test = load("res://tests/vehicle_collisions.gd").new()
+	var failures = await test.run(self, "--collisions-capture" in OS.get_cmdline_user_args())
 	get_tree().quit(1 if failures > 0 else 0)
 
 func connections_test() -> void:

@@ -69,7 +69,7 @@
 - Y 向上，车辆 X 为长度方向、正 X 为车头、Z 为宽度方向。
 - 默认按原型米建模；厘米模型设置 `model_scale: 0.01`。
 - 车辆原点在长宽中心与车轮接触轨面处；布景原点在地面。
-- manifest 中的尺寸用于编组长度与碰撞包络，应与模型一致。
+- manifest 中的尺寸用于编组长度、碰撞检测及刚体盒形碰撞体，应与模型一致；`mass_kg` 同时决定撞击中的质量比例。车辆碰撞不读取 GLB 的三角网格或自定义物理形状。
 - 通过 `GLTFDocument.append_from_file()` 动态加载；当前使用静态模型，不自动驱动车轮、车门、骨骼或嵌入动画。
 
 `alpine_pack/water_tower.glb` 是可用实例，其原创几何由 `tools/build_example_model.py` 生成。

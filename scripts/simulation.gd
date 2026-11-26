@@ -12,6 +12,9 @@ var next_uid = 1
 var paused = false
 var wet_rails = false
 var derailments = true
+var collision_physics = true
+
+const Collisions = preload("res://scripts/vehicle_collisions.gd")
 
 func _init(g: RailGraph, c: RailCatalog) -> void:
 	graph = g
@@ -270,7 +273,9 @@ func reset_train(train: Dictionary) -> bool:
 	train.state = "就绪"
 	return true
 
-func derail(train: Dictionary) -> void:
+func derail(train: Dictionary, reason: String = "轨道尽头脱轨", impact_poses: Array = []) -> void:
+	if train.has("derailed_cars"):
+		return
 	# Keep the last valid route position for recovery, and hand each car's
 	# pose and momentum to the 3D rigid-body solver. Arrays survive JSON saves.
 	var poses = []
@@ -282,13 +287,13 @@ func derail(train: Dictionary) -> void:
 			"rotation":[rotation.x, rotation.y, rotation.z, rotation.w],
 			"linear":RailGraph.v_array(tangent * train.velocity * 10.0 / ratio()),
 			"angular":[0.0, 0.0, 0.0], "sleeping":false})
-	train.derailed_cars = poses
+	train.derailed_cars = poses if impact_poses.is_empty() else impact_poses
 	train.fault = true
 	train.target = 0.0
 	train.traction = 0.0
 	train.braking = 0.0
-	train.state = "轨道尽头脱轨 · 可复位上轨"
-	train_event.emit(train.id, "列车冲出轨道尽头 · 已进入脱轨物理模拟")
+	train.state = reason + " · 可复位上轨"
+	train_event.emit(train.id, reason + " · 已进入刚体物理模拟")
 
 func fault(train: Dictionary, reason: String) -> void:
 	if not train.fault:
@@ -299,93 +304,159 @@ func fault(train: Dictionary, reason: String) -> void:
 	train.target = 0.0
 
 func tick(dt: float) -> void:
-	if paused:
+	if paused or dt <= 0.0 or not is_finite(dt):
 		return
+	# Limit travel relative to the smallest car dimension. Two approaching
+	# trains cannot cross a whole collision envelope between contact checks.
+	var max_speed = 0.0
+	var min_dimension = INF
 	for train in trains:
-		if train.fault:
+		if not train.has("derailed_cars"):
+			max_speed = maxf(max_speed, absf(train.velocity) + dt)
+		for id in train.cars:
+			var def: Dictionary = catalog.vehicles[id]
+			min_dimension = minf(min_dimension, minf(def.length_m, minf(def.width_m, def.height_m)))
+	var step = minf(1.0 / 60.0, min_dimension / maxf(4.0 * max_speed, 0.001))
+	var count = maxi(1, ceili(dt / step))
+	for i in count:
+		_tick_step(dt / count)
+
+func _tick_step(dt: float) -> void:
+	var before = {}
+	if trains.size() > 1:
+		for train in trains:
+			before[train.id] = {"boxes":Collisions.boxes(self, train), "s":train.s, "route":train.route.duplicate(true)}
+	# All trains advance on the same clock before resolving any pair.
+	for train in trains:
+		_advance_train(train, dt)
+	if trains.size() < 2:
+		return
+	var after = {}
+	var after_bounds = {}
+	for train in trains:
+		after[train.id] = Collisions.boxes(self, train)
+		after_bounds[train.id] = Collisions.bounds(after[train.id])
+	for i in trains.size():
+		for j in range(i + 1, trains.size()):
+			var a: Dictionary = trains[i]
+			var b: Dictionary = trains[j]
+			if a.has("derailed_cars") and b.has("derailed_cars"):
+				continue # The rigid-body solver owns subsequent wreck contacts.
+			if not collision_physics:
+				if (a.fault and b.fault) or not overlaps(a, b):
+					continue
+				for train in [a, b]:
+					if not train.has("derailed_cars"):
+						train.s = before[train.id].s
+						train.route = before[train.id].route
+						fault(train, "列车接触 · 已停车")
+				continue
+			if not after_bounds[a.id].intersects(after_bounds[b.id]):
+				continue
+			var fraction = Collisions.first_contact(before[a.id].boxes, after[a.id], before[b.id].boxes, after[b.id])
+			if fraction < 0.0:
+				continue
+			for train in [a, b]:
+				if train.has("derailed_cars"):
+					continue
+				var poses = Collisions.impact_poses(self, train, before[train.id].boxes, after[train.id], fraction)
+				# Keep a nonpenetrating route position for recovery. Rigid-body
+				# poses start at the contact instant, with each car's momentum.
+				train.s = before[train.id].s
+				train.route = before[train.id].route
+				derail(train, "车辆碰撞", poses)
+
+func collide_moving_wreck(before: Array, after: Array) -> float:
+	var first = 2.0
+	var hit: Dictionary = {}
+	for other in trains:
+		if other.has("derailed_cars"):
 			continue
-		ensure_route(train)
-		var total_mass = 0.0
-		var driven_mass = 0.0
-		var power = 0.0
-		var max_force = 0.0
-		var max_speed = 600.0
-		var slope_force = 0.0
-		var max_lateral = 0.0
-		for sample in car_samples(train):
-			var car: Dictionary = catalog.vehicles[sample.vehicle]
-			total_mass += car.mass_kg
-			slope_force += car.mass_kg * 9.81 * sample.tangent.y
-			max_speed = minf(max_speed, car.max_kmh)
-			if car.kind == "locomotive":
-				driven_mass += car.mass_kg
-				power += car.power_w
-				max_force += car.tractive_n
-			if sample.radius > 0.0:
-				max_lateral = maxf(max_lateral, train.velocity * train.velocity / (sample.radius * ratio() / 10.0))
-		var velocity: float = train.velocity
-		var speed = absf(velocity)
-		var desired = minf(train.target, max_speed) / 3.6 * train.direction
-		var error = desired - velocity
-		var adhesion = driven_mass * 9.81 * (0.12 if wet_rails else 0.25)
-		var traction_cap = minf(minf(max_force, power / maxf(speed, 1.0)), adhesion)
-		var acceleration_request = clampf(error * 0.5, -0.8, 0.8)
-		var effort = acceleration_request * total_mass + slope_force
-		var tractive = 0.0
-		var braking = 0.0
-		if effort * train.direction > 0 and not bool(train.get("emergency", false)) and train.target > 0:
-			tractive = clampf(effort, -traction_cap, traction_cap)
+		var fraction = Collisions.swept_contact(before, after, Collisions.boxes(self, other))
+		if fraction >= 0.0 and fraction < first:
+			first = fraction
+			hit = other
+	if hit.is_empty():
+		return -1.0
+	derail(hit, "车辆碰撞")
+	return first
+
+func _advance_train(train: Dictionary, dt: float) -> void:
+	if train.fault:
+		return
+	ensure_route(train)
+	var total_mass = 0.0
+	var driven_mass = 0.0
+	var power = 0.0
+	var max_force = 0.0
+	var max_speed = 600.0
+	var slope_force = 0.0
+	var max_lateral = 0.0
+	for sample in car_samples(train):
+		var car: Dictionary = catalog.vehicles[sample.vehicle]
+		total_mass += car.mass_kg
+		slope_force += car.mass_kg * 9.81 * sample.tangent.y
+		max_speed = minf(max_speed, car.max_kmh)
+		if car.kind == "locomotive":
+			driven_mass += car.mass_kg
+			power += car.power_w
+			max_force += car.tractive_n
+		if sample.radius > 0.0:
+			max_lateral = maxf(max_lateral, train.velocity * train.velocity / (sample.radius * ratio() / 10.0))
+	var velocity: float = train.velocity
+	var speed = absf(velocity)
+	var desired = minf(train.target, max_speed) / 3.6 * train.direction
+	var error = desired - velocity
+	var adhesion = driven_mass * 9.81 * (0.12 if wet_rails else 0.25)
+	var traction_cap = minf(minf(max_force, power / maxf(speed, 1.0)), adhesion)
+	var acceleration_request = clampf(error * 0.5, -0.8, 0.8)
+	var effort = acceleration_request * total_mass + slope_force
+	var tractive = 0.0
+	var braking = 0.0
+	if effort * train.direction > 0 and not bool(train.get("emergency", false)) and train.target > 0:
+		tractive = clampf(effort, -traction_cap, traction_cap)
+	else:
+		braking = minf(absf(effort), total_mass * (1.2 if bool(train.get("emergency", false)) else 0.75))
+	if bool(train.get("emergency", false)):
+		braking = total_mass * 1.2
+	var resistance = total_mass * 9.81 * (0.0015 + 0.00002 * speed) + 0.5 * 1.225 * 8.0 * speed * speed
+	var force = tractive - slope_force
+	if speed < 0.015 and absf(force) <= resistance + braking:
+		velocity = 0.0
+	else:
+		var moving_sign = signf(velocity) if speed > 0.001 else signf(force)
+		var next_velocity = velocity + (force - moving_sign * (resistance + braking)) / total_mass * dt
+		if velocity * next_velocity < 0 and absf(force) < resistance + braking:
+			next_velocity = 0.0
+		velocity = next_velocity
+	train.traction = absf(tractive)
+	train.braking = braking
+	train.grade = slope_force / (total_mass * 9.81) * 100.0
+	train.velocity = velocity
+	if derailments and max_lateral > 1.8 and speed > 2.0:
+		fault(train, "弯道超速 · 脱轨保护")
+		return
+	var movement: float = velocity * dt * 10.0 / ratio()
+	train.s += movement
+	ensure_route(train)
+	var remaining = route_length(train)
+	if train.s >= remaining - 0.005:
+		train.s = remaining - 0.006
+		if derailments:
+			fault(train, "到达轨道尽头")
 		else:
-			braking = minf(absf(effort), total_mass * (1.2 if bool(train.get("emergency", false)) else 0.75))
-		if bool(train.get("emergency", false)):
-			braking = total_mass * 1.2
-		var resistance = total_mass * 9.81 * (0.0015 + 0.00002 * speed) + 0.5 * 1.225 * 8.0 * speed * speed
-		var force = tractive - slope_force
-		if speed < 0.015 and absf(force) <= resistance + braking:
-			velocity = 0.0
+			derail(train)
+	elif train.s - consist_length(train.cars) <= 0.005:
+		train.s = consist_length(train.cars) + 0.006
+		if derailments:
+			fault(train, "到达轨道尽头")
 		else:
-			var moving_sign = signf(velocity) if speed > 0.001 else signf(force)
-			var next_velocity = velocity + (force - moving_sign * (resistance + braking)) / total_mass * dt
-			if velocity * next_velocity < 0 and absf(force) < resistance + braking:
-				next_velocity = 0.0
-			velocity = next_velocity
-		train.traction = absf(tractive)
-		train.braking = braking
-		train.grade = slope_force / (total_mass * 9.81) * 100.0
-		train.velocity = velocity
-		if derailments and max_lateral > 1.8 and speed > 2.0:
-			fault(train, "弯道超速 · 脱轨保护")
-			continue
-		var movement: float = velocity * dt * 10.0 / ratio()
-		train.s += movement
-		ensure_route(train)
-		var old_s: float = train.s - movement
-		var remaining = route_length(train)
-		if train.s >= remaining - 0.005:
-			train.s = remaining - 0.006
-			if derailments:
-				fault(train, "到达轨道尽头")
-			else:
-				derail(train)
-		elif train.s - consist_length(train.cars) <= 0.005:
-			train.s = consist_length(train.cars) + 0.006
-			if derailments:
-				fault(train, "到达轨道尽头")
-			else:
-				derail(train)
-		else:
-			for other in trains:
-				if train.id != other.id and overlaps(train, other):
-					# Undo the substep so stopped rolling stock never interpenetrates.
-					train.s = old_s
-					fault(train, "列车接触 · 已停车")
-					fault(other, "列车接触 · 已停车")
-					break
-		train.distance_m += absf(velocity) * dt
-		if not train.fault:
-			train.state = "运行中" if absf(velocity) > 0.05 else "已停车"
-			if train.get("emergency", false) and absf(velocity) < 0.01:
-				train.emergency = false
+			derail(train)
+	train.distance_m += absf(velocity) * dt
+	if not train.fault:
+		train.state = "运行中" if absf(velocity) > 0.05 else "已停车"
+		if train.get("emergency", false) and absf(velocity) < 0.01:
+			train.emergency = false
 
 func occupied_part(uid: int) -> bool:
 	for train in trains:

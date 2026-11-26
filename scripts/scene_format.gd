@@ -102,7 +102,7 @@ static func validate(data: Dictionary, catalog: RailCatalog) -> String:
 	if not integer(data.get("next_train"), max_train + 1, 10000001):
 		return "列车 ID 计数器不正确"
 	var physics = data.get("physics", {})
-	if not physics is Dictionary or not physics.get("wet", false) is bool or not physics.get("derailments", true) is bool:
+	if not physics is Dictionary or not physics.get("wet", false) is bool or not physics.get("derailments", true) is bool or not physics.get("collisions", true) is bool:
 		return "物理配置格式不正确"
 	var cam = data.get("camera", {})
 	if not cam is Dictionary or not vector(cam.get("target", [0,0,0])) or not number(cam.get("yaw", 0), -10000, 10000) or not number(cam.get("pitch", 0.88), 0.1, 1.55) or not number(cam.get("distance", 34), 3, MAX_CAMERA_DISTANCE):
