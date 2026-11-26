@@ -140,6 +140,8 @@ func _ready() -> void:
 		call_deferred("flex_test")
 	if "--steam-test" in OS.get_cmdline_user_args():
 		call_deferred("steam_test")
+	if "--vehicles-test" in OS.get_cmdline_user_args():
+		call_deferred("vehicles_test")
 	if "--connections-test" in OS.get_cmdline_user_args():
 		call_deferred("connections_test")
 	if "--audio-test" in OS.get_cmdline_user_args():
@@ -1735,6 +1737,8 @@ func integration_test() -> void:
 	failures += await flex_track_test.run(self)
 	var steam_locomotive_test = load("res://tests/steam_locomotive.gd").new()
 	failures += await steam_locomotive_test.run(self)
+	var detailed_vehicles_test = load("res://tests/detailed_vehicles.gd").new()
+	failures += await detailed_vehicles_test.run(self)
 	var connections_test = load("res://tests/vehicle_connections.gd").new()
 	failures += await connections_test.run(self)
 	var sound_test = load("res://tests/audio.gd").new()
@@ -1764,4 +1768,10 @@ func audio_test() -> void:
 	await get_tree().process_frame
 	var test = load("res://tests/audio.gd").new()
 	var failures = await test.run(self)
+	get_tree().quit(1 if failures > 0 else 0)
+
+func vehicles_test() -> void:
+	await get_tree().process_frame
+	var test = load("res://tests/detailed_vehicles.gd").new()
+	var failures = await test.run(self, "--vehicles-capture" in OS.get_cmdline_user_args())
 	get_tree().quit(1 if failures > 0 else 0)

@@ -106,6 +106,9 @@ static func vehicle(def: Dictionary, ratio: float) -> Node3D:
 	if custom:
 		root.add_child(custom)
 		return root
+	if preload("res://scripts/detailed_vehicles.gd").supports(def):
+		root.free()
+		return preload("res://scripts/detailed_vehicles.gd").create(def, ratio)
 	var l: float = def.length_m * f
 	var w: float = def.width_m * f
 	var h: float = def.height_m * f
