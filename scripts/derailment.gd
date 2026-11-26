@@ -83,14 +83,13 @@ func create_consist(sim: RailSimulation, train: Dictionary) -> void:
 		rig.heights.append(height)
 		if i > 0:
 			var previous: RigidBody3D = rig.bodies[i - 1]
-			var previous_length: float = sim.catalog.vehicles[train.cars[i - 1]].length_m * factor
 			var joint = PinJoint3D.new()
 			joint.exclude_nodes_from_collision = false
 			root.add_child(joint)
-			# Attach at the coupler height, with free pitch/yaw/roll.
-			var a = previous.position - previous.basis.x * previous_length * 0.5 - previous.basis.y * rig.heights[i - 1] * 0.28
-			var b = body.position + body.basis.x * def.length_m * factor * 0.5 - body.basis.y * height * 0.28
-			joint.position = (a + b) * 0.5
+			# Use the same mounting points as the visible shanks/drawbar.
+			var a = Transform3D(previous.basis, previous.position - previous.basis.y * rig.heights[i - 1] * 0.5)
+			var b = Transform3D(body.basis, body.position - body.basis.y * height * 0.5)
+			joint.position = preload("res://scripts/vehicle_connections.gd").joint_center(sim.catalog.vehicles[train.cars[i - 1]], def, a, b, sim.ratio())
 			joint.node_a = joint.get_path_to(previous)
 			joint.node_b = joint.get_path_to(body)
 	consists[train.id] = rig

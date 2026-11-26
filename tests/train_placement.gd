@@ -117,7 +117,7 @@ func run(app, screenshots: bool = false) -> int:
 	place_button.grab_focus()
 	place_button.pressed.emit()
 	motion(app, app.camera.unproject_position(Vector3(0, 0.5, 0)))
-	check(app.preview != null and app.preview.visible and app.valid_placement and app.preview.get_child_count() == 2, "悬浮轨道显示完整编组")
+	check(app.preview != null and app.preview.visible and app.valid_placement and app.preview.get_child_count() == 3 and app.preview.has_node("Connections"), "悬浮轨道显示完整编组及连接件")
 	if app.preview == null:
 		app.reparent(original_parent)
 		viewport.queue_free()
@@ -135,7 +135,7 @@ func run(app, screenshots: bool = false) -> int:
 	check(not app.train_placement_reversed and app.preview.get_child(0).transform.is_equal_approx(forward), "第二次 Tab 恢复原朝向与位置")
 	app.draft_cars.append("core:tanker")
 	app.update_preview()
-	check(app.preview.get_child_count() == 3, "编辑草稿时虚影同步更新车辆数量")
+	check(app.preview.get_child_count() == 4 and app.preview.get_node("Connections").links.size() == 2, "编辑草稿时虚影同步更新车辆与连接数量")
 	app.draft_cars = ["core:coach"]
 	app.update_preview()
 	check(not app.valid_placement and app.preview.visible and app.train_preview_material.albedo_color == app.TRAIN_PREVIEW_INVALID, "无机车时仍显示红色完整虚影")
@@ -147,7 +147,7 @@ func run(app, screenshots: bool = false) -> int:
 	app.update_preview()
 	key(app, KEY_TAB)
 	var expected = []
-	for node in app.preview.get_children():
+	for node in app.preview.get_children().slice(0, app.draft_cars.size()):
 		expected.append(node.transform)
 	click(app)
 	check(app.simulation.trains.size() == 1 and not app.placing_train and not app.preview.visible, "点击蓝色虚影完成放置并清除预览")

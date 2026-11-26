@@ -150,8 +150,6 @@ static func vehicle(def: Dictionary, ratio: float) -> Node3D:
 			if def.id == "core:electric":
 				for x in [-0.2, 0.2]:
 					box(root, Vector3(l * 0.14, h * 0.04, w * 0.7), Vector3(l * x, h * 1.12, 0), black)
-	for x in [-0.5, 0.5]:
-		box(root, Vector3(f * 0.65, h * 0.07, w * 0.18), Vector3(l * x, h * 0.22, 0), black)
 	return root
 
 static func apply_preview_material(node: Node, mat: Material) -> void:

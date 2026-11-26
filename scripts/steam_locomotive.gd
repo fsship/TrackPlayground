@@ -335,8 +335,7 @@ static func _buffers(b: Builder, x: float, width: float) -> void:
 		b.cylinder(0.11, 0.28, Vector3(x + sign_x * 0.20, 0.98, z), "darksteel", Vector3.RIGHT)
 		b.cylinder(0.23, 0.075, Vector3(x + sign_x * 0.36, 0.98, z), "black", Vector3.RIGHT)
 		b.line([Vector3(x + sign_x * 0.16, 0.92, z * 0.45), Vector3(x + sign_x * 0.22, 0.52, z * 0.45), Vector3(x + sign_x * 0.32, 0.46, z * 0.34)], 0.046, "black")
-	b.box(Vector3(0.64, 0.14, 0.18), Vector3(x + sign_x * 0.31, 0.88, 0), "darksteel")
-	b.box(Vector3(0.22, 0.23, 0.28), Vector3(x + sign_x * 0.53, 0.88, 0), "black")
+	# Central shanks are articulated by RailVehicleConnections.
 	for z in [-1.3, -0.8, 0.8, 1.3]:
 		b.rivet(Vector3(x + sign_x * 0.11, 0.97, z), Vector3.RIGHT, "steel")
 

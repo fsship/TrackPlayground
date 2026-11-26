@@ -20,6 +20,20 @@ func frames(app, count: int, train: Dictionary = {}, car_index: int = 0) -> floa
 	await app.get_tree().process_frame
 	return min_up
 
+func ground_clearance(app, train: Dictionary, index: int) -> float:
+	# A pitched car's wheel-plane origin can remain high while its front end
+	# touches the ground. Test the collision envelope, not the origin's height.
+	var sample: Dictionary = app.simulation.car_samples(train)[index]
+	var def: Dictionary = app.catalog.vehicles[train.cars[index]]
+	var factor: float = 10.0 / app.simulation.ratio()
+	var clearance = INF
+	for x in [-0.5, 0.5]:
+		for y in [0.0, 1.0]:
+			for z in [-0.5, 0.5]:
+				var corner: Vector3 = sample.position + sample.basis * Vector3(x * def.length_m, y * def.height_m, z * def.width_m) * factor
+				clearance = minf(clearance, corner.y - app.terrain.height_at(corner.x, corner.z))
+	return clearance
+
 func setup(app, scale_name: String, reverse: bool, height: float = 3.0) -> Dictionary:
 	app.empty_scene(false)
 	app.graph.scale_name = scale_name
@@ -78,7 +92,9 @@ func run(app) -> int:
 				sim.paused = false
 			await frames(app, 1200)
 			var landed = RailGraph.array_v(train.derailed_cars[index].position)
-			check(landed.y > -0.6 and landed.y < 1.0, "车辆与地面碰撞后停留在地表附近")
+			var clearance = ground_clearance(app, train, index)
+			print("LANDED: ", scale_name, " reverse=", reverse, " origin=", landed, " ground_clearance=", clearance)
+			check(absf(clearance) < 0.05, "车辆碰撞包络触地且未明显穿入地表")
 			check(RailGraph.array_v(train.derailed_cars[index].linear).length() < 0.3, "落地后摩擦耗散动能")
 			check(fall_tilt < 0.98, "坠落过程产生俯仰或翻滚，而非只平移")
 			var saved = JSON.parse_string(JSON.stringify(app.snapshot()))

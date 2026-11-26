@@ -9,6 +9,7 @@ const Simulation = preload("res://scripts/simulation.gd")
 const Geometry = preload("res://scripts/geometry.gd")
 const Terrain = preload("res://scripts/terrain.gd")
 const Derailment = preload("res://scripts/derailment.gd")
+const VehicleConnections = preload("res://scripts/vehicle_connections.gd")
 const AMBER = Color("e9b56b")
 const MINT = Color("78dcc1")
 const MUTED = Color("91a5ac")
@@ -28,6 +29,7 @@ var rail_root: Node3D
 var scenery_root: Node3D
 var train_root: Node3D
 var train_nodes: Dictionary = {}
+var train_connections: Dictionary = {}
 var derailment: Node3D
 var scenery_items: Array = []
 var preview: Node3D
@@ -133,6 +135,8 @@ func _ready() -> void:
 		call_deferred("flex_test")
 	if "--steam-test" in OS.get_cmdline_user_args():
 		call_deferred("steam_test")
+	if "--connections-test" in OS.get_cmdline_user_args():
+		call_deferred("connections_test")
 	if "--capture" in OS.get_cmdline_user_args():
 		call_deferred("capture_preview")
 
@@ -830,6 +834,7 @@ func empty_scene(refresh: bool = true, width: float = Terrain.WIDTH, depth: floa
 	clear_children(scenery_root)
 	clear_children(train_root)
 	train_nodes.clear()
+	train_connections.clear()
 	clear_children(rail_root)
 	resize_sandbox(width, depth)
 	if refresh:
@@ -868,6 +873,7 @@ func rebuild_rails() -> void:
 func rebuild_trains() -> void:
 	clear_children(train_root)
 	train_nodes.clear()
+	train_connections.clear()
 	for train in simulation.trains:
 		var nodes = []
 		for id in train.cars:
@@ -875,6 +881,10 @@ func rebuild_trains() -> void:
 			train_root.add_child(node)
 			nodes.append(node)
 		train_nodes[train.id] = nodes
+		var connections = VehicleConnections.new()
+		connections.setup(train.cars, catalog, simulation.ratio())
+		train_root.add_child(connections)
+		train_connections[train.id] = connections
 	update_train_visuals()
 
 func update_train_visuals() -> void:
@@ -901,6 +911,7 @@ func update_train_visuals() -> void:
 				node.rotate_object_local(Vector3.RIGHT, 0.14)
 			if node.has_method("sync_motion"):
 				node.sync_motion(train.distance_m, train.velocity, simulation.paused, false)
+		train_connections[train.id].update_from_cars(train_nodes[train.id])
 
 func add_scenery(id: String, pos: Vector3, angle: float) -> void:
 	var item = {"definition":id, "position":Graph.v_array(pos), "yaw":angle}
@@ -1195,6 +1206,10 @@ func update_train_preview(hit: Dictionary) -> void:
 			var node = Geometry.vehicle(catalog.vehicles[id], simulation.ratio())
 			Geometry.apply_preview_material(node, train_preview_material)
 			preview.add_child(node)
+		var connections = VehicleConnections.new()
+		connections.setup(draft_cars, catalog, simulation.ratio())
+		Geometry.apply_preview_material(connections, train_preview_material)
+		preview.add_child(connections)
 		add_child(preview)
 		preview_key = key
 	train_preview_material.albedo_color = TRAIN_PREVIEW_VALID if valid_placement else TRAIN_PREVIEW_INVALID
@@ -1206,6 +1221,7 @@ func update_train_preview(hit: Dictionary) -> void:
 		var node: Node3D = preview.get_child(i)
 		node.basis = Basis(tangent, side.cross(tangent).normalized(), side)
 		node.position = sample.position + Vector3.UP * 0.08
+	preview.get_node("Connections").update_from_cars(preview.get_children().slice(0, samples.size()))
 	preview.visible = true
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -1640,6 +1656,8 @@ func integration_test() -> void:
 	failures += await flex_track_test.run(self)
 	var steam_locomotive_test = load("res://tests/steam_locomotive.gd").new()
 	failures += await steam_locomotive_test.run(self)
+	var connections_test = load("res://tests/vehicle_connections.gd").new()
+	failures += await connections_test.run(self)
 	print("INTEGRATION_RESULT failures=" + str(failures))
 	get_tree().quit(1 if failures > 0 else 0)
 
@@ -1653,4 +1671,10 @@ func steam_test() -> void:
 	await get_tree().process_frame
 	var test = load("res://tests/steam_locomotive.gd").new()
 	var failures = await test.run(self, "--steam-capture" in OS.get_cmdline_user_args())
+	get_tree().quit(1 if failures > 0 else 0)
+
+func connections_test() -> void:
+	await get_tree().process_frame
+	var test = load("res://tests/vehicle_connections.gd").new()
+	var failures = await test.run(self, "--connections-capture" in OS.get_cmdline_user_args())
 	get_tree().quit(1 if failures > 0 else 0)
