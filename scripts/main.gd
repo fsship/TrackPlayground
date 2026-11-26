@@ -131,6 +131,8 @@ func _ready() -> void:
 		call_deferred("integration_test")
 	if "--flex-test" in OS.get_cmdline_user_args():
 		call_deferred("flex_test")
+	if "--steam-test" in OS.get_cmdline_user_args():
+		call_deferred("steam_test")
 	if "--capture" in OS.get_cmdline_user_args():
 		call_deferred("capture_preview")
 
@@ -669,12 +671,9 @@ func build_train_ui() -> void:
 		picker.add_item(catalog.vehicles[id].name)
 	left_body.add_child(picker)
 	button(left_body, "＋ 添加到编组", func():
-		if draft_cars.size() >= 24:
-			toast("每个编组最多 24 辆车辆")
-			return
-		draft_cars.append(ids[picker.selected])
-		update_draft()
+		append_draft_vehicle(ids[picker.selected])
 	)
+	label(left_body, "蒸汽机车自动附带一辆煤水车。", 12, MUTED)
 	draft_label = label(left_body, "", 13, MUTED)
 	draft_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	update_draft()
@@ -698,6 +697,16 @@ func build_train_ui() -> void:
 	left_body.add_child(derails)
 	var note = label(left_body, "保护开启：弯道超速、轨道尽头停车。关闭后，列车会冲出轨道尽头并坠落；可在右侧复位上轨。换向前请停车。", 12, MUTED)
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+
+func append_draft_vehicle(id: String) -> void:
+	var addition = [id]
+	if catalog.vehicles.has(catalog.vehicles[id].get("companion", "")):
+		addition.append(catalog.vehicles[id].companion)
+	if draft_cars.size() + addition.size() > 24:
+		toast("每个编组最多 24 辆；蒸汽机车与煤水车需要 2 个空位" if addition.size() == 2 else "每个编组最多 24 辆车辆")
+		return
+	draft_cars.append_array(addition)
+	update_draft()
 
 func update_draft() -> void:
 	if not is_instance_valid(draft_label):
@@ -879,6 +888,8 @@ func update_train_visuals() -> void:
 			if train.has("derailed_cars"):
 				node.basis = sample.basis
 				node.position = sample.position
+				if node.has_method("sync_motion"):
+					node.sync_motion(train.distance_m, train.velocity, simulation.paused, true)
 				continue
 			var tangent: Vector3 = sample.tangent
 			var side = tangent.cross(Vector3.UP).normalized()
@@ -888,6 +899,8 @@ func update_train_visuals() -> void:
 			node.position = sample.position + Vector3.UP * 0.08
 			if train.fault and "脱轨" in train.state:
 				node.rotate_object_local(Vector3.RIGHT, 0.14)
+			if node.has_method("sync_motion"):
+				node.sync_motion(train.distance_m, train.velocity, simulation.paused, false)
 
 func add_scenery(id: String, pos: Vector3, angle: float) -> void:
 	var item = {"definition":id, "position":Graph.v_array(pos), "yaw":angle}
@@ -1625,6 +1638,8 @@ func integration_test() -> void:
 	failures += await track_placement_test.run(self)
 	var flex_track_test = load("res://tests/flex_track.gd").new()
 	failures += await flex_track_test.run(self)
+	var steam_locomotive_test = load("res://tests/steam_locomotive.gd").new()
+	failures += await steam_locomotive_test.run(self)
 	print("INTEGRATION_RESULT failures=" + str(failures))
 	get_tree().quit(1 if failures > 0 else 0)
 
@@ -1632,4 +1647,10 @@ func flex_test() -> void:
 	await get_tree().process_frame
 	var test = load("res://tests/flex_track.gd").new()
 	var failures = await test.run(self, "--flex-capture" in OS.get_cmdline_user_args())
+	get_tree().quit(1 if failures > 0 else 0)
+
+func steam_test() -> void:
+	await get_tree().process_frame
+	var test = load("res://tests/steam_locomotive.gd").new()
+	var failures = await test.run(self, "--steam-capture" in OS.get_cmdline_user_args())
 	get_tree().quit(1 if failures > 0 else 0)

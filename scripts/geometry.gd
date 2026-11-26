@@ -98,6 +98,8 @@ static func custom_model(def: Dictionary, factor: float) -> Node3D:
 	return model
 
 static func vehicle(def: Dictionary, ratio: float) -> Node3D:
+	if def.id in ["core:steam", "core:steam_tender"]:
+		return preload("res://scripts/steam_locomotive.gd").create(def.id == "core:steam_tender", ratio)
 	var root = Node3D.new()
 	var f = 10.0 / ratio
 	var custom = custom_model(def, f)

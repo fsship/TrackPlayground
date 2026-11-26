@@ -30,6 +30,8 @@ func _init() -> void:
 			p.source = "内置"
 			tracks[p.id] = p
 	vehicles = {
+		"core:steam": {"id":"core:steam", "name":"SY 0808 · 蒸汽机车（含煤水车）", "kind":"locomotive", "length_m":14.2, "width_m":3.4, "height_m":4.35, "mass_kg":84000.0, "power_w":1100000.0, "tractive_n":195000.0, "max_kmh":80.0, "color":"252d30", "source":"内置", "companion":"core:steam_tender"},
+		"core:steam_tender": {"id":"core:steam_tender", "name":"SY 0808 · 煤水车", "kind":"freight", "length_m":8.4, "width_m":3.15, "height_m":3.55, "mass_kg":54000.0, "max_kmh":80.0, "color":"252d30", "source":"内置"},
 		"core:diesel": {"id":"core:diesel", "name":"DF · 柴油机车", "kind":"locomotive", "length_m":20.0, "width_m":3.1, "height_m":4.3, "mass_kg":120000.0, "power_w":2400000.0, "tractive_n":280000.0, "max_kmh":120.0, "color":"d97d48", "source":"内置"},
 		"core:electric": {"id":"core:electric", "name":"EL · 电力机车", "kind":"locomotive", "length_m":19.0, "width_m":3.1, "height_m":4.3, "mass_kg":88000.0, "power_w":4200000.0, "tractive_n":240000.0, "max_kmh":160.0, "color":"3a8f94", "source":"内置"},
 		"core:coach": {"id":"core:coach", "name":"客运车厢", "kind":"coach", "length_m":25.0, "width_m":3.1, "height_m":4.1, "mass_kg":46000.0, "max_kmh":160.0, "color":"ddc99f", "source":"内置"},
