@@ -7,6 +7,8 @@ extends Node3D
 const DRIVER_X = [-2.65, -0.9, 0.85, 2.6]
 const DRIVER_RADIUS = 0.78
 const CRANK = 0.29
+const SAND_PIPE_RADIUS = 0.016
+const SAND_PIPE_FRAME_Z = 0.842
 const PALETTE = {
 	"boiler": [Color("293236"), 0.48, 0.55],
 	"black": [Color("171e22"), 0.68, 0.35],
@@ -339,17 +341,38 @@ static func _buffers(b: Builder, x: float, width: float) -> void:
 	for z in [-1.3, -0.8, 0.8, 1.3]:
 		b.rivet(Vector3(x + sign_x * 0.11, 0.97, z), Vector3.RIGHT, "steel")
 
+static func sand_pipe_paths(side: int) -> Array:
+	var paths = []
+	# Two outlets on the sand dome follow the boiler jacket, then descend
+	# through wheel gaps on the frame side of the coupling rods. The running
+	# board's inner edge is at |z| = 1.05, so these pipes pass behind it.
+	for route in [[0.48, 0.0, -0.9], [0.82, 3.50, 2.6]]:
+		var outlet_x: float = route[0]
+		var drop_x: float = route[1]
+		var axle_x: float = route[2]
+		paths.append([
+			Vector3(outlet_x, 3.65, side * 0.36),
+			Vector3(outlet_x, 3.40, side * 0.64),
+			Vector3(drop_x, 3.05, side * 0.99),
+			Vector3(drop_x, 2.28, side * 0.99),
+			Vector3(drop_x, 2.10, side * SAND_PIPE_FRAME_Z),
+			Vector3(drop_x, 1.51, side * SAND_PIPE_FRAME_Z),
+			Vector3(drop_x, 0.30, side * SAND_PIPE_FRAME_Z),
+			Vector3(axle_x + 0.64, 0.16, side * 0.80),
+			Vector3(axle_x + 0.52, 0.08, side * 0.745)
+		])
+	return paths
+
 static func _body() -> ArrayMesh:
 	var b = Builder.new()
 	# Frame, firebox and running boards.
+	_underframe(b)
 	for side in [-1, 1]:
-		b.box(Vector3(12.7, 0.32, 0.14), Vector3(0, 1.02, side * 0.51), "red")
 		b.box(Vector3(11.7, 0.10, 0.40), Vector3(0.2, 1.78, side * 1.25), "black")
 		b.box(Vector3(11.7, 0.055, 0.035), Vector3(0.2, 1.8, side * 1.46), "steel")
 		for x in [-3.0, -1.25, 0.5, 2.25, 4.5]:
 			b.box(Vector3(0.16, 0.54, 0.16), Vector3(x, 1.43, side * 1.04), "red", Basis(Vector3.RIGHT, side * -0.45))
 		for x in DRIVER_X:
-			b.box(Vector3(0.18, 0.28, 0.20), Vector3(x + 0.57, 0.66, side * 0.76), "black")
 			for layer in 4:
 				b.box(Vector3(0.91 - layer * 0.12, 0.035, 0.13), Vector3(x, 1.27 + layer * 0.045, side * 0.58), "darksteel")
 		b.box(Vector3(1.7, 0.14, 0.18), Vector3(4.0, 0.70, side * 1.08), "darksteel")
@@ -365,8 +388,15 @@ static func _body() -> ArrayMesh:
 		b.cylinder(0.18, 1.06, Vector3(4.90, 1.37, side * 1.05), "boiler", Vector3.RIGHT)
 		b.line([Vector3(4.72, 1.52, side * 1.03), Vector3(4.72, 2.16, side * 0.97), Vector3(4.05, 2.55, side * 0.75)], 0.10, "black")
 		# Sand lines, brake pipes and handrail stanchions.
-		for x in [-0.85, 1.65]:
-			b.line([Vector3(x, 3.48, side * 0.25), Vector3(x + 0.14, 3.05, side * 0.92), Vector3(x + 0.28, 1.92, side * 1.02), Vector3(x + 0.38, 0.44, side * 0.75)], 0.022, "brass")
+		for path in sand_pipe_paths(side):
+			# Brass fittings above the footplate; the frame-mounted delivery
+			# tubes are dark steel, with only a short rail-facing nozzle exposed.
+			b.line(path.slice(0, 5), SAND_PIPE_RADIUS, "brass")
+			b.line(path.slice(4), SAND_PIPE_RADIUS, "darksteel")
+			var drop_x: float = path[5].x
+			b.pipe(Vector3(drop_x, 1.51, side * 0.64), path[5], 0.012, "darksteel")
+			b.ring(0.017, 0.029, 0.030, path[5], "darksteel")
+			b.ring(0.017, 0.025, 0.035, path[4], "brass")
 		b.line([Vector3(-3.6, 2.78, side * 1.05), Vector3(4.5, 2.78, side * 1.05), Vector3(4.96, 2.50, side * 0.86)], 0.027, "steel")
 		for x in [-3.35, -1.8, -0.25, 1.3, 2.85, 4.4]:
 			b.pipe(Vector3(x, 2.78, side * 0.85), Vector3(x, 2.78, side * 1.05), 0.023, "darksteel")
@@ -433,6 +463,80 @@ static func _body() -> ArrayMesh:
 		b.pipe(Vector3(5.72, 0.43, side * 1.49), Vector3(5.72, 1.78, side * 1.49), 0.028, "steel")
 	return b.finish(shared_materials)
 
+static func _underframe(b: Builder) -> void:
+	# The load-bearing frame sits inside the wheel backs (|z| < 0.65),
+	# leaving the open spokes and outside valve gear unobstructed.
+	for side in [-1, 1]:
+		var z = side * 0.49
+		b.box(Vector3(12.7, 0.50, 0.20), Vector3(0, 1.12, z), "red")
+		b.box(Vector3(12.7, 0.09, 0.30), Vector3(0, 1.40, z), "darksteel")
+		b.box(Vector3(7.25, 0.09, 0.25), Vector3(-0.05, 0.86, z), "red")
+		for x in DRIVER_X:
+			# Pedestal jaws, axlebox covers and spring hangers behind each wheel.
+			b.box(Vector3(0.40, 0.35, 0.23), Vector3(x, 0.80, z), "darksteel")
+			b.box(Vector3(0.23, 0.22, 0.025), Vector3(x, 0.80, z + side * 0.128), "steel")
+			for offset in [-0.29, 0.29]:
+				b.box(Vector3(0.12, 0.53, 0.21), Vector3(x + offset, 0.93, z), "red")
+				b.pipe(Vector3(x + offset, 1.04, z), Vector3(x + offset, 1.49, z), 0.032, "steel")
+				b.cylinder(0.060, 0.045, Vector3(x + offset, 1.48, z), "darksteel")
+			# Brake shoes tangent to the tyre; the hangers stay inboard of rods.
+			b.box(Vector3(0.095, 0.27, 0.15), Vector3(x + 0.835, 0.78, side * 0.75), "black")
+			b.pipe(Vector3(x + 0.86, 1.34, side * 0.77), Vector3(x + 0.835, 0.77, side * 0.77), 0.032, "darksteel")
+			b.cylinder(0.055, 0.09, Vector3(x + 0.86, 1.34, side * 0.77), "steel", Vector3.BACK)
+		for x in [-3.55, -1.775, -0.025, 1.725, 3.50]:
+			b.box(Vector3(0.20, 0.63, 0.23), Vector3(x, 1.03, z), "red")
+			for y in [0.84, 1.20]:
+				b.rivet(Vector3(x, y, z + side * 0.13), Vector3.BACK, "steel")
+		# Equalising beams and the longitudinal brake pull rod.
+		for x in [-1.775, -0.025, 1.725]:
+			b.box(Vector3(1.25, 0.085, 0.10), Vector3(x, 1.22, side * 0.61), "darksteel")
+		b.pipe(Vector3(-4.0, 0.43, side * 0.40), Vector3(3.5, 0.43, side * 0.40), 0.027, "steel")
+	for x in [-3.55, -1.775, -0.025, 1.725, 3.50]:
+		b.box(Vector3(0.20, 0.20, 1.20), Vector3(x, 1.25, 0), "red")
+		b.pipe(Vector3(x, 0.44, -0.57), Vector3(x, 0.44, 0.57), 0.045, "darksteel")
+	# Boiler bearers and the substantial smokebox/cylinder saddle.
+	for x in [-1.8, 0.4, 2.55]:
+		b.box(Vector3(0.42, 0.34, 1.20), Vector3(x, 1.57, 0), "black")
+		b.box(Vector3(0.61, 0.075, 1.30), Vector3(x, 1.41, 0), "darksteel")
+	b.box(Vector3(1.25, 0.42, 1.40), Vector3(4.40, 1.52, 0), "black")
+	b.box(Vector3(2.12, 0.13, 2.10), Vector3(5.30, 1.32, 0), "darksteel")
+	for side in [-1, 1]:
+		b.box(Vector3(2.12, 0.25, 0.11), Vector3(5.30, 1.20, side * 0.99), "red")
+		for x in [4.44, 4.87, 5.30, 5.73, 6.16]:
+			b.rivet(Vector3(x, 1.20, side * 1.055), Vector3.BACK, "steel")
+	# Firebox foundation and tapered ashpan underneath the cab. The taper
+	# clears the trailing axle and keeps the lower pan between the wheel backs.
+	b.box(Vector3(2.10, 0.42, 1.30), Vector3(-4.55, 1.43, 0), "black")
+	var pan = CylinderMesh.new()
+	pan.radial_segments = 4
+	pan.rings = 1
+	pan.top_radius = 1.0
+	pan.bottom_radius = 0.62
+	pan.height = 0.66
+	b.add(pan, Vector3(-4.60, 1.00, 0), "black", Basis.from_scale(Vector3(2.20 / sqrt(2.0), 1, 1.25 / sqrt(2.0))) * Basis(Vector3.UP, PI / 4))
+	b.box(Vector3(2.22, 0.08, 1.29), Vector3(-4.60, 1.33, 0), "darksteel")
+	for side in [-1, 1]:
+		b.box(Vector3(0.75, 0.26, 0.055), Vector3(-4.35, 1.12, side * 0.575), "darksteel")
+		b.pipe(Vector3(-5.63, 1.30, side * 0.65), Vector3(-3.62, 1.30, side * 0.65), 0.028, "steel")
+		for x in [-5.48, -5.12, -4.76, -4.40, -4.04, -3.68]:
+			b.rivet(Vector3(x, 1.34, side * 0.655))
+		b.line([Vector3(-5.9, 1.35, side * 1.07), Vector3(-5.25, 1.13, side * 0.92), Vector3(-4.85, 1.13, side * 0.66)], 0.035, "darksteel")
+	# Leading and trailing pony trucks: axleboxes, springs, triangulated
+	# drawbars and pivot bearings connect the small wheels to the main frame.
+	for x in [-5.45, 5.35]:
+		var pivot_x = x - signf(x) * 0.85
+		b.box(Vector3(1.72, 0.15, 1.02), Vector3(x, 0.67, 0), "black")
+		b.cylinder(0.19, 0.20, Vector3(pivot_x, 0.87, 0), "darksteel")
+		b.cylinder(0.11, 0.38, Vector3(pivot_x, 0.97, 0), "steel")
+		for side in [-1, 1]:
+			b.box(Vector3(0.33, 0.29, 0.22), Vector3(x, 0.49, side * 0.49), "darksteel")
+			b.pipe(Vector3(x, 0.62, side * 0.48), Vector3(pivot_x, 0.87, side * 0.20), 0.07, "red")
+			for layer in 5:
+				b.box(Vector3(0.96 - layer * 0.12, 0.032, 0.13), Vector3(x, 0.88 + layer * 0.038, side * 0.47), "darksteel")
+			for offset in [-0.49, 0.49]:
+				b.pipe(Vector3(x + offset, 0.68, side * 0.47), Vector3(x + offset, 1.07, side * 0.47), 0.028, "steel")
+			b.box(Vector3(0.08, 0.20, 0.12), Vector3(x + 0.53, 0.48, side * 0.74), "black")
+
 static func _cab(b: Builder) -> void:
 	b.box(Vector3(2.65, 0.14, 3.02), Vector3(-4.87, 1.48, 0), "black")
 	# Real window openings: lower panels and thin posts, not painted-on windows.
@@ -492,6 +596,20 @@ static func _cab(b: Builder) -> void:
 static func _tender() -> ArrayMesh:
 	var b = Builder.new()
 	b.box(Vector3(7.8, 0.30, 2.94), Vector3(0, 1.07, 0), "black")
+	# Underframe girders, bogie bolsters and brake equipment fill the otherwise
+	# empty centre below the water tank without enclosing the wheelsets.
+	b.box(Vector3(7.0, 0.28, 0.38), Vector3(0, 0.84, 0), "black")
+	for side in [-1, 1]:
+		b.box(Vector3(7.35, 0.24, 0.13), Vector3(0, 0.92, side * 1.25), "black")
+		b.box(Vector3(7.35, 0.065, 0.21), Vector3(0, 0.79, side * 1.25), "darksteel")
+		for x in [-3.5, -2.25, -0.9, 0.9, 2.25, 3.5]:
+			b.rivet(Vector3(x, 0.93, side * 1.325))
+		b.pipe(Vector3(-3.35, 0.49, side * 0.38), Vector3(3.35, 0.49, side * 0.38), 0.027, "steel")
+	for x in [-2.25, 0.0, 2.25]:
+		b.box(Vector3(0.26, 0.18, 2.40), Vector3(x, 0.88, 0), "darksteel")
+	b.cylinder(0.18, 1.28, Vector3(0.0, 0.62, 0.74), "black", Vector3.RIGHT)
+	b.cylinder(0.14, 0.62, Vector3(0.15, 0.65, -0.68), "darksteel", Vector3.RIGHT)
+	b.line([Vector3(0.48, 0.65, -0.68), Vector3(1.10, 0.65, -0.68), Vector3(1.35, 0.49, -0.38)], 0.033, "steel")
 	b.box(Vector3(7.3, 1.60, 2.96), Vector3(-0.10, 2.05, 0), "boiler")
 	b.box(Vector3(7.30, 0.09, 3.04), Vector3(-0.10, 2.88, 0), "darksteel")
 	# Coal bunker with a recessed top, visible individual irregular lumps.

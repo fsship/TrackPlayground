@@ -23,6 +23,43 @@ func bounds(node: Node3D, parent_transform: Transform3D = Transform3D.IDENTITY) 
 				result = child_bounds if result.size == Vector3.ZERO else result.merge(child_bounds)
 	return result
 
+func test_sand_pipe_clearance(model) -> void:
+	var steam = preload("res://scripts/steam_locomotive.gd")
+	var samples: Array[Vector3] = []
+	for side in [-1, 1]:
+		for path in steam.sand_pipe_paths(side):
+			for i in range(path.size() - 1):
+				var steps = ceili(path[i].distance_to(path[i + 1]) / 0.02)
+				for step in range(steps + 1):
+					samples.append(path[i].lerp(path[i + 1], float(step) / steps))
+	check(samples.all(func(p): return p.y >= 1.85 or absf(p.z) + steam.SAND_PIPE_RADIUS < 0.90), "走道板下的撒砂管贴近车架，未向车身外侧悬挂")
+	var wheel_gap = INF
+	for point in samples:
+		for axle in model.axles:
+			# A capped cylinder encloses the full rotating wheel, including its
+			# flange, spokes and crank. Check both sides, not just this pose.
+			var radial = maxf(0.0, Vector2(point.x - axle.node.position.x, point.y - axle.radius).length() - axle.radius - 0.025)
+			var axial = maxf(0.0, maxf(0.64 - absf(point.z), absf(point.z) - 1.02))
+			wheel_gap = minf(wheel_gap, Vector2(radial, axial).length() - steam.SAND_PIPE_RADIUS)
+	check(wheel_gap > 0.015, "左右撒砂管避开全部轮缘和辐条的整周旋转范围，最小余量 %.1f mm" % (wheel_gap * 1000))
+	var clear_gear = true
+	for phase in 128:
+		model.set_travel(phase * TAU * steam.DRIVER_RADIUS / 128)
+		for linkage in model.gear:
+			var parts = [linkage.coupling, linkage.connecting, linkage.slider, linkage.valve] + linkage.links
+			for part in parts:
+				var local_box: AABB = part.mesh.get_aabb()
+				var outer_box: AABB = (part.transform * local_box).grow(steam.SAND_PIPE_RADIUS + 0.03)
+				var inverse: Transform3D = part.transform.affine_inverse()
+				for point in samples:
+					if not outer_box.has_point(point):
+						continue
+					var local_point = inverse * point
+					var nearest = local_point.clamp(local_box.position, local_box.end)
+					if point.distance_to(part.transform * nearest) <= steam.SAND_PIPE_RADIUS + 0.03:
+						clear_gear = false
+	check(clear_gear, "左右撒砂管在 128 个轮相下均避开联杆、主连杆、十字头及配汽细杆")
+
 func run(app, capture: bool = false) -> int:
 	var start = Time.get_ticks_msec()
 	for ratio in [87.1, 160.0]:
@@ -51,6 +88,8 @@ func run(app, capture: bool = false) -> int:
 						var pin = linkage.coupling.position + Vector3(0.85, 0, linkage.side * 0.14)
 						valid_gear = valid_gear and (rod.transform * Vector3(-1.675, 0, 0)).distance_to(pin) < 0.0001
 				check(valid_gear, "整周左右四分之一相位连杆与曲柄、十字头保持连接")
+				if ratio == 87.1:
+					test_sand_pipe_clearance(model)
 			var original_material = model.model.get_child(0).mesh.surface_get_material(0)
 			RailGeometry.apply_preview_material(model, RailGeometry.material(Color(0.2, 0.5, 1, 0.4)))
 			check(model.model.get_child(0).mesh.surface_get_material(0) == original_material and model.smoke == null, "预览不污染共享模型材质、不创建烟雾")
@@ -148,6 +187,10 @@ func capture_models(app) -> void:
 	var views = [
 		["steam-overview", Vector3(17, 11, 27), Vector3(-4.5, 1.7, 0)],
 		["steam-running-gear", Vector3(5.4, 3.2, 15), Vector3(0.6, 1.4, 0)],
+		["steam-underframe-side", Vector3(3.0, 2.2, 17), Vector3(-0.3, 1.5, 0)],
+		["steam-underframe-rear", Vector3(-10.0, 2.5, 9), Vector3(-4.6, 1.3, 0)],
+		["steam-sand-pipes", Vector3(0, 3.4, 15), Vector3(0, 1.4, 0)],
+		["steam-compact-pipes", Vector3(4.5, 4.8, 13), Vector3(0.7, 1.8, 0)],
 		["steam-cab", Vector3(-12, 6.1, 10), Vector3(-4.35, 2.7, 0)],
 		["steam-front", Vector3(16, 7.0, 11), Vector3(2.0, 2.0, 0)]
 	]
