@@ -10,16 +10,18 @@ const Geometry = preload("res://scripts/geometry.gd")
 const Terrain = preload("res://scripts/terrain.gd")
 const Derailment = preload("res://scripts/derailment.gd")
 const VehicleConnections = preload("res://scripts/vehicle_connections.gd")
+const Sound = preload("res://scripts/audio.gd")
 const AMBER = Color("e9b56b")
 const MINT = Color("78dcc1")
 const MUTED = Color("91a5ac")
 const TRAIN_PREVIEW_VALID = Color(0.15, 0.55, 1.0, 0.42)
 const TRAIN_PREVIEW_INVALID = Color(1.0, 0.18, 0.16, 0.42)
-const OPERATE_HINT = "点击列车选中 · 点击道岔切换 · 空格暂停 · 右键旋转 / 中键平移 / 滚轮缩放"
+const OPERATE_HINT = "点击列车选中 · 点击道岔切换 · H 鸣笛 · 空格暂停 · 右键旋转 / 中键平移 / 滚轮缩放"
 const TRACK_HINT = "Tab 切换端点 · 左键铺轨 · R 旋转 15° · F 镜像 · Esc 取消 · Ctrl+Z 撤销"
 var catalog: RailCatalog
 var graph: RailGraph
 var simulation: RailSimulation
+var sound: Node3D
 var terrain: RailTerrain
 var table_base: MeshInstance3D
 var table_trim: MeshInstance3D
@@ -101,6 +103,7 @@ var confirm_dialog: ConfirmationDialog
 var new_scene_dialog: ConfirmationDialog
 var new_scene_width: SpinBox
 var new_scene_depth: SpinBox
+var sound_dialog: AcceptDialog
 var toast_time = 0.0
 var ui_time = 0.0
 var preview_time = 0.0
@@ -117,7 +120,9 @@ func _ready() -> void:
 	catalog.load_mods("user://mods")
 	graph = Graph.new(catalog)
 	simulation = Simulation.new(graph, catalog)
-	simulation.train_event.connect(func(_id, message): toast(message))
+	sound = Sound.new()
+	add_child(sound)
+	simulation.train_event.connect(func(_id, message): toast(message); sound.play_effect("alert"))
 	simulation.train_added.connect(func(_train): rebuild_trains())
 	simulation.train_removed.connect(func(_id): rebuild_trains())
 	create_world()
@@ -137,6 +142,8 @@ func _ready() -> void:
 		call_deferred("steam_test")
 	if "--connections-test" in OS.get_cmdline_user_args():
 		call_deferred("connections_test")
+	if "--audio-test" in OS.get_cmdline_user_args():
+		call_deferred("audio_test")
 	if "--capture" in OS.get_cmdline_user_args():
 		call_deferred("capture_preview")
 
@@ -255,6 +262,7 @@ func create_ui() -> void:
 	button(top_row, "Mod", show_mods)
 	button(top_row, "保存", func(): show_file(true))
 	button(top_row, "打开", func(): show_file(false))
+	button(top_row, "声音", func(): sound_dialog.popup_centered())
 	pause_button = button(top_row, "Ⅱ 暂停", toggle_pause)
 	pause_button.custom_minimum_size.x = 100
 
@@ -309,6 +317,8 @@ func create_ui() -> void:
 		if not t.is_empty():
 			simulation.emergency(t)
 	)
+	var horn_button = button(right_body, "鸣笛  ·  H", command_horn)
+	horn_button.tooltip_text = "选中列车鸣笛；蒸汽机车使用汽笛"
 	telemetry = label(right_body, "", 13, MUTED)
 	telemetry.custom_minimum_size.y = 170
 	telemetry.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -326,6 +336,7 @@ func create_ui() -> void:
 		if not t.is_empty():
 			push_undo()
 			simulation.remove_train(t.id)
+			sound.play_effect("remove")
 			selected_train = simulation.trains[0].id if not simulation.trains.is_empty() else -1
 			refresh_train_list()
 	)
@@ -396,6 +407,7 @@ func create_ui() -> void:
 	mod_dialog.title = "Mod 管理 · API v1"
 	mod_dialog.min_size = Vector2i(720, 430)
 	ui.add_child(mod_dialog)
+	create_sound_dialog()
 	set_mode("operate")
 	get_viewport().size_changed.connect(responsive_layout)
 	top.resized.connect(responsive_layout)
@@ -482,9 +494,39 @@ func button(parent: Node, text: String, callback: Callable) -> Button:
 	var b = Button.new()
 	b.text = text
 	b.custom_minimum_size.y = 36
+	b.pressed.connect(func(): sound.play_effect("click"))
 	b.pressed.connect(callback)
 	parent.add_child(b)
 	return b
+
+func create_sound_dialog() -> void:
+	sound_dialog = AcceptDialog.new()
+	sound_dialog.title = "声音设置"
+	sound_dialog.ok_button_text = "完成"
+	sound_dialog.min_size = Vector2i(390, 310)
+	ui.add_child(sound_dialog)
+	var body = VBoxContainer.new()
+	body.add_theme_constant_override("separation", 14)
+	sound_dialog.add_child(body)
+	var mute = CheckButton.new()
+	mute.text = "静音全部声音"
+	mute.button_pressed = sound.muted
+	mute.toggled.connect(sound.set_muted)
+	body.add_child(mute)
+	for item in [["master", "总音量", sound.master_volume], ["effects", "操作音效", sound.effects_volume], ["trains", "列车运行与鸣笛", sound.trains_volume]]:
+		var caption = label(body, "%s  %d%%" % [item[1], roundi(item[2] * 100)], 15)
+		var slider = HSlider.new()
+		slider.min_value = 0
+		slider.max_value = 100
+		slider.step = 1
+		slider.value = item[2] * 100
+		slider.custom_minimum_size = Vector2(330, 24)
+		slider.value_changed.connect(func(value):
+			sound.set_volume(item[0], value / 100.0)
+			caption.text = "%s  %d%%" % [item[1], value]
+		)
+		body.add_child(slider)
+	label(body, "设置自动保存 · 暂停时停止列车运行声", 13, MUTED)
 
 func separator(parent: Node) -> void:
 	parent.add_child(HSeparator.new())
@@ -819,6 +861,7 @@ func resize_sandbox(width: float, depth: float) -> void:
 	water.mesh.size = Vector3(terrain.width - 0.1, 0.025, terrain.depth - 0.1)
 
 func empty_scene(refresh: bool = true, width: float = Terrain.WIDTH, depth: float = Terrain.DEPTH) -> void:
+	sound.clear_trains()
 	brush_active = false
 	placing_train = false
 	follow_train = false
@@ -871,6 +914,7 @@ func rebuild_rails() -> void:
 	refresh_stats()
 
 func rebuild_trains() -> void:
+	sound.clear_trains()
 	clear_children(train_root)
 	train_nodes.clear()
 	train_connections.clear()
@@ -990,6 +1034,7 @@ func _process(dt: float) -> void:
 		var t = current_train()
 		camera_target = camera_target.lerp(simulation.car_samples(t)[0].position, minf(dt * 3, 1))
 	update_camera()
+	sound.sync_trains(simulation.trains, train_nodes, camera.global_position, simulation.paused, dt)
 	preview_time += dt
 	if preview_time > 0.04:
 		update_preview()
@@ -1033,7 +1078,7 @@ func over_canvas() -> bool:
 	for hud in [top_panel, bottom_panel, left_panel, right_panel]:
 		if hud.get_global_rect().has_point(p):
 			return false
-	return not file_dialog.visible and not mod_dialog.visible and not confirm_dialog.visible and not new_scene_dialog.visible
+	return not file_dialog.visible and not mod_dialog.visible and not confirm_dialog.visible and not new_scene_dialog.visible and not sound_dialog.visible
 
 func update_preview() -> void:
 	valid_placement = false
@@ -1170,6 +1215,7 @@ func choose_connection_endpoint(target: Dictionary) -> bool:
 	var result = graph.plan_connection(connection_start, target, terrain.width, terrain.depth, connection_min_radius / 100.0)
 	if not result.error.is_empty():
 		toast("无法自动连接：" + result.error, 7)
+		sound.play_effect("alert")
 		return false
 	push_undo()
 	graph.add_part("core:" + graph.scale_name + ":flex_link", connection_start.position, 0, 0, false, {"controls":result.controls})
@@ -1181,6 +1227,7 @@ func choose_connection_endpoint(target: Dictionary) -> bool:
 	rebuild_rails()
 	layout_changed.emit()
 	toast("已连接两个端点 · 柔轨 %.0f mm · Ctrl+Z 可撤销" % (result.length * 100), 6)
+	sound.play_effect("connect")
 	return true
 
 func update_train_preview(hit: Dictionary) -> void:
@@ -1270,11 +1317,16 @@ func _unhandled_input(event: InputEvent) -> void:
 			capture_frame()
 
 func _input(event: InputEvent) -> void:
+	if event is InputEventKey and event.keycode == KEY_H and event.pressed and not event.echo and not event.ctrl_pressed and not event.alt_pressed and not event.meta_pressed:
+		var focus = get_viewport().gui_get_focus_owner()
+		if not file_dialog.visible and not mod_dialog.visible and not confirm_dialog.visible and not new_scene_dialog.visible and not sound_dialog.visible and not (focus is LineEdit or focus is TextEdit):
+			command_horn()
+			get_viewport().set_input_as_handled()
 	# Handle Tab before GUI focus navigation consumes it. Keep normal Tab
 	# navigation in dialogs, editors and tools that do not use placement anchors.
 	if event is InputEventKey and event.keycode == KEY_TAB and ((placing_train and mode == "operate") or (mode == "track" and not erase and not auto_connect)):
 		var focus = get_viewport().gui_get_focus_owner()
-		if not file_dialog.visible and not mod_dialog.visible and not confirm_dialog.visible and not new_scene_dialog.visible and not (focus is LineEdit or focus is TextEdit):
+		if not file_dialog.visible and not mod_dialog.visible and not confirm_dialog.visible and not new_scene_dialog.visible and not sound_dialog.visible and not (focus is LineEdit or focus is TextEdit):
 			if event.pressed and not event.echo:
 				if mode == "track":
 					cycle_track_endpoint()
@@ -1315,9 +1367,11 @@ func canvas_click() -> void:
 				var child = scenery_root.get_child(best)
 				scenery_root.remove_child(child)
 				child.queue_free()
+				sound.play_effect("remove")
 		else:
 			push_undo()
 			add_scenery(selected_scenery, placement, yaw)
+			sound.play_effect("place")
 		refresh_stats()
 	elif mode == "operate":
 		var hit = pick_track()
@@ -1327,6 +1381,7 @@ func canvas_click() -> void:
 			var result = simulation.train_placement(draft_cars, hit.edge, hit.distance, train_placement_reversed)
 			if not result.error.is_empty():
 				toast("无法放置：" + result.error, 7)
+				sound.play_effect("alert")
 				return
 			push_undo()
 			var t = simulation.add_train(draft_cars, hit.edge, hit.distance, "", train_placement_reversed)
@@ -1340,6 +1395,7 @@ func canvas_click() -> void:
 				refresh_train_list()
 				refresh_stats()
 				toast("编组已就位，使用右侧滑块调速。")
+				sound.play_effect("couple")
 			return
 		for t in simulation.trains:
 			for sample in simulation.car_samples(t):
@@ -1350,6 +1406,7 @@ func canvas_click() -> void:
 		if catalog.tracks[hit.part.definition].kind == "turnout":
 			if simulation.occupied_part(hit.part.uid):
 				toast("道岔正被列车占用，无法扳动。")
+				sound.play_effect("alert")
 			else:
 				push_undo()
 				hit.part.branch = 1 - int(hit.part.get("branch", 0))
@@ -1357,6 +1414,7 @@ func canvas_click() -> void:
 					simulation.refresh_route(train)
 				rebuild_rails()
 				toast("道岔已切换至" + ("直股" if hit.part.branch == 0 else "侧股"))
+				sound.play_effect("turnout")
 
 func place_track() -> bool:
 	var paths = graph.make_paths(catalog.tracks[selected_track], placement, placement_yaw, grade, mirror, flex_options)
@@ -1379,6 +1437,7 @@ func place_track() -> bool:
 	rebuild_rails()
 	layout_changed.emit()
 	toast("已铺设 " + catalog.tracks[selected_track].name + (" · 端点已连接" if snapped else ""))
+	sound.play_effect("connect" if snapped else "place")
 	return true
 
 func pick_track() -> Dictionary:
@@ -1418,6 +1477,7 @@ func pick_endpoint() -> Dictionary:
 func remove_track(uid: int) -> void:
 	if simulation.occupied_part(uid):
 		toast("这段轨道正被列车占用，请先移走列车。")
+		sound.play_effect("alert")
 		return
 	push_undo()
 	# Trim only unoccupied history/future entries; retain the complete path
@@ -1441,6 +1501,7 @@ func remove_track(uid: int) -> void:
 	graph.remove_part(uid)
 	rebuild_rails()
 	layout_changed.emit()
+	sound.play_effect("remove")
 
 func conform_terrain() -> void:
 	push_undo()
@@ -1465,6 +1526,7 @@ func replace_consist() -> void:
 		toast("编组不可用，或线路空闲长度不足；已保留原编组。")
 	else:
 		toast("已更新编组")
+		sound.play_effect("couple")
 	rebuild_trains()
 	refresh_train_list()
 
@@ -1473,8 +1535,21 @@ func command_stop() -> void:
 	if not t.is_empty():
 		t.target = 0.0
 
+func command_horn() -> void:
+	var train = current_train()
+	if train.is_empty():
+		toast("请先放置并选中一列列车")
+		return
+	if train.has("derailed_cars"):
+		return
+	if train_nodes.has(train.id) and not train_nodes[train.id].is_empty():
+		sound.horn(train, train_nodes[train.id][0].global_position)
+
 func toggle_pause() -> void:
 	simulation.paused = not simulation.paused
+	if simulation.paused:
+		sound.stop_trains()
+	sound.play_effect("click" if simulation.paused else "confirm")
 	update_ui()
 
 func toast(message: String, duration: float = 4.0) -> void:
@@ -1514,6 +1589,7 @@ func undo() -> void:
 	redo_stack.append(snapshot())
 	apply_snapshot(undo_stack.pop_back())
 	toast("已撤销；物理已暂停。Ctrl+Shift+Z 重做。")
+	sound.play_effect("confirm")
 
 func redo() -> void:
 	if redo_stack.is_empty():
@@ -1521,6 +1597,7 @@ func redo() -> void:
 	undo_stack.append(snapshot())
 	apply_snapshot(redo_stack.pop_back())
 	toast("已重做；物理已暂停。")
+	sound.play_effect("confirm")
 
 func show_file(save: bool) -> void:
 	file_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE if save else FileDialog.FILE_MODE_OPEN_FILE
@@ -1534,6 +1611,7 @@ func file_chosen(path: String) -> void:
 	if file_dialog.file_mode == FileDialog.FILE_MODE_SAVE_FILE:
 		if save_layout(path):
 			toast("已保存：" + path, 7)
+			sound.play_effect("confirm")
 	else:
 		var json = JSON.new()
 		if json.parse(FileAccess.get_file_as_string(path)) != OK or not json.data is Dictionary:
@@ -1546,6 +1624,7 @@ func file_chosen(path: String) -> void:
 		push_undo()
 		apply_snapshot(json.data)
 		toast("场景已打开，物理处于暂停状态。", 6)
+		sound.play_effect("confirm")
 
 func save_layout(path: String) -> bool:
 	var file = FileAccess.open(path + ".tmp", FileAccess.WRITE)
@@ -1658,6 +1737,8 @@ func integration_test() -> void:
 	failures += await steam_locomotive_test.run(self)
 	var connections_test = load("res://tests/vehicle_connections.gd").new()
 	failures += await connections_test.run(self)
+	var sound_test = load("res://tests/audio.gd").new()
+	failures += await sound_test.run(self)
 	print("INTEGRATION_RESULT failures=" + str(failures))
 	get_tree().quit(1 if failures > 0 else 0)
 
@@ -1677,4 +1758,10 @@ func connections_test() -> void:
 	await get_tree().process_frame
 	var test = load("res://tests/vehicle_connections.gd").new()
 	var failures = await test.run(self, "--connections-capture" in OS.get_cmdline_user_args())
+	get_tree().quit(1 if failures > 0 else 0)
+
+func audio_test() -> void:
+	await get_tree().process_frame
+	var test = load("res://tests/audio.gd").new()
+	var failures = await test.run(self)
 	get_tree().quit(1 if failures > 0 else 0)
