@@ -1062,7 +1062,7 @@ func update_preview() -> void:
 
 func update_track_preview(hit: Vector3, snap: Dictionary) -> void:
 	var paths = graph.make_paths(catalog.tracks[selected_track], Vector3.ZERO, 0, grade, mirror, flex_options)
-	var endpoints = Graph.placement_endpoints(paths)
+	var endpoints = Graph.placement_endpoints(paths, catalog.tracks[selected_track], 0, grade, mirror, flex_options)
 	track_placement_endpoint %= endpoints.size()
 	var endpoint: Dictionary = endpoints[track_placement_endpoint]
 	var anchor = Vector3(snappedf(hit.x, 0.05), placement_height, snappedf(hit.z, 0.05))

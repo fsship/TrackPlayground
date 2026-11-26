@@ -47,12 +47,29 @@ func make_paths(definition: Dictionary, origin: Vector3, yaw: float, grade: floa
 		paths.append(pts)
 	return paths
 
-static func placement_endpoints(paths: Array) -> Array:
+static func path_endpoints(points: PackedVector3Array, definition: Dictionary, branch: int, yaw: float, grade: float, mirror: bool, options: Dictionary) -> Array:
+	var start_out = (points[0] - points[1]).normalized()
+	var finish_out = (points[-1] - points[-2]).normalized()
+	if definition.kind != "flex" or definition.shape in ["straight", "arc"]:
+		# Baked chords point at segment midpoints, not at the ends of an arc.
+		# Use the design tangents so snapping cannot accumulate half-step errors.
+		var angle = 0.0
+		if definition.kind == "curve" or (definition.kind == "turnout" and branch == 1):
+			angle = deg_to_rad(float(definition.angle_deg))
+		elif definition.kind == "flex" and definition.shape == "arc":
+			angle = deg_to_rad(float(RailFlexTrack.settings(definition, options).angle_deg))
+		start_out = Vector3(-1, -grade, 0).normalized().rotated(Vector3.UP, yaw)
+		finish_out = Vector3(cos(angle), grade, sin(angle) * (-1.0 if mirror else 1.0)).normalized().rotated(Vector3.UP, yaw)
+	return [{"position":points[0], "out":start_out}, {"position":points[-1], "out":finish_out}]
+
+static func placement_endpoints(paths: Array, definition: Dictionary, yaw: float = 0.0, grade: float = 0.0, mirror: bool = false, options: Dictionary = {}) -> Array:
 	# All generated paths share their starting point, including turnouts.
-	var first: PackedVector3Array = paths[0]
-	var result = [{"position":first[0], "out":(first[0] - first[1]).normalized()}]
-	for points in paths:
-		result.append({"position":points[-1], "out":(points[-1] - points[-2]).normalized()})
+	var result = []
+	for branch in paths.size():
+		var ends = path_endpoints(paths[branch], definition, branch, yaw, grade, mirror, options)
+		if branch == 0:
+			result.append(ends[0])
+		result.append(ends[1])
 	return result
 
 func part_paths(part: Dictionary) -> Array:
@@ -82,6 +99,7 @@ func rebuild() -> void:
 				distances.append(distances[-1] + pts[i].distance_to(pts[i - 1]))
 			var id = str(int(part.uid)) + ":" + str(branch)
 			edges[id] = {"id":id, "part":part, "branch":branch, "points":pts, "distances":distances, "length":distances[-1], "radius":float(def.get("radius_mm", 0.0)) / 100.0 if branch == 1 or def.kind == "curve" else 0.0}
+			edges[id].endpoints = path_endpoints(pts, def, branch, float(part.yaw), float(part.get("grade", 0.0)), bool(part.get("mirror", false)), part.get("flex", {}))
 			if def.kind == "flex":
 				edges[id].radii = RailFlexTrack.radii(pts)
 	for id in edges:
@@ -101,8 +119,10 @@ func endpoint_key(id: String, end: int) -> String:
 	return id + "@" + str(end)
 
 func endpoint(id: String, end: int) -> Dictionary:
-	var pts: PackedVector3Array = edges[id].points
-	return {"edge":id, "end":end, "position":pts[0] if end == 0 else pts[-1], "out":(pts[0] - pts[1]).normalized() if end == 0 else (pts[-1] - pts[-2]).normalized()}
+	var result: Dictionary = edges[id].endpoints[end].duplicate()
+	result.edge = id
+	result.end = end
+	return result
 
 func next_edge(entry: Dictionary) -> Dictionary:
 	var candidates: Array = connections.get(endpoint_key(entry.edge, 0 if entry.rev else 1), [])
