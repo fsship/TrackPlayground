@@ -84,6 +84,7 @@ func run(app) -> int:
 	invalid = data.duplicate(true)
 	invalid.trains[0].route[0].edge = "99999:0"
 	check(not app.apply_snapshot(invalid) and app.simulation.trains.size() == 2, "错误路径不会破坏已加载世界")
+	test_scene_import(app)
 	var parked_s: float = app.simulation.trains[0].s
 	app.simulation.tick(1.0)
 	check(app.simulation.trains[0].s == parked_s, "暂停时物理位置不变")
@@ -123,6 +124,38 @@ func run(app) -> int:
 	var report = FileAccess.open("res://test-results/integration.json", FileAccess.WRITE)
 	report.store_string(JSON.stringify({"checks":checks,"failures":failures,"engine":Engine.get_version_info().string,"tested":"blank startup, sandbox sizing/persistence/bounds, camera panning, HO/N routing, train control, collision, grades, switches, terrain, persistence, mods"}, "  "))
 	return failures
+
+func test_scene_import(app) -> void:
+	var before = app.snapshot()
+	var original_undo = app.undo_stack.duplicate(true)
+	var original_redo = app.redo_stack.duplicate(true)
+	# Seed redo to ensure an unsuccessful import does not discard it.
+	app.redo_stack.append(before.duplicate(true))
+	var undo_before = JSON.stringify(app.undo_stack)
+	var redo_before = JSON.stringify(app.redo_stack)
+	check(not app.load_layout_text("not JSON"), "拒绝上传的无效 JSON")
+	check(not app.load_layout_text("[]"), "拒绝非对象的场景 JSON")
+	var invalid = before.duplicate(true)
+	invalid.trains[0].route[0].edge = "99999:0"
+	check(not app.load_layout_text(JSON.stringify(invalid)), "文本导入拒绝不存在的列车轨道")
+	check(JSON.stringify(app.snapshot()) == JSON.stringify(before), "导入失败不改变当前场景")
+	check(JSON.stringify(app.undo_stack) == undo_before and JSON.stringify(app.redo_stack) == redo_before, "导入失败保留撤销和重做记录")
+	var loaded = before.duplicate(true)
+	loaded.camera.yaw += 0.25
+	check(app.load_layout_text("\uFEFF" + JSON.stringify(loaded)), "支持带 UTF-8 BOM 的场景文本")
+	check(app.simulation.paused and is_equal_approx(app.camera_yaw, loaded.camera.yaw), "文本导入应用场景并暂停模拟")
+	check(app.redo_stack.is_empty(), "成功导入清空过期重做记录")
+	app.undo()
+	check(is_equal_approx(app.camera_yaw, before.camera.yaw), "可撤销恢复导入前的场景")
+	app.redo()
+	check(is_equal_approx(app.camera_yaw, loaded.camera.yaw), "可重做场景导入")
+	app.apply_snapshot(before)
+	app.undo_stack = original_undo
+	app.redo_stack = original_redo
+	if not OS.has_feature("web"):
+		app.show_file(false)
+		check(app.file_dialog.visible and app.file_dialog.file_mode == FileDialog.FILE_MODE_OPEN_FILE, "Windows 保留本地打开对话框")
+		app.file_dialog.hide()
 
 func test_scene_settings(app) -> void:
 	check(app.graph.parts.is_empty() and app.simulation.trains.is_empty() and app.scenery_items.is_empty(), "默认启动为空白场景")

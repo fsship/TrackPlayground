@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>$GODOT_PROJECT_NAME</title>
+  <link rel="stylesheet" href="./scene-files.css">
+  $GODOT_HEAD_INCLUDE
+</head>
+<body>
+  <canvas id="canvas" tabindex="0" aria-label="轨道工坊三维沙盘">浏览器需要支持 Canvas。</canvas>
+  <noscript>请启用 JavaScript 后运行轨道工坊。</noscript>
+  <div id="status" role="status">
+    <h1>轨道工坊</h1>
+    <p id="status-text">正在加载沙盘…</p>
+    <progress id="status-progress"></progress>
+  </div>
+  <dialog id="scene-dialog" aria-labelledby="scene-title">
+    <h2 id="scene-title">打开铁路场景</h2>
+    <p>选择本地 .railway 文件，或输入场景文件的网址。<br>打开后暂停模拟，可撤销恢复当前场景。</p>
+    <label class="file-label" for="scene-file">从本地文件加载</label>
+    <input id="scene-file" type="file" accept=".railway,.json,application/json">
+    <form id="scene-url-form">
+      <label for="scene-url">从 URL 加载</label>
+      <div class="url-row">
+        <input id="scene-url" type="text" placeholder="./layouts/example.railway 或 https://…" autocomplete="off" spellcheck="false">
+        <button id="scene-load" type="submit">加载</button>
+      </div>
+    </form>
+    <p class="hint">相对地址以当前网页目录为基准。外站文件需允许跨域访问（CORS）；本地文件只在浏览器内读取。</p>
+    <p id="scene-message" role="status" aria-live="polite"></p>
+    <div class="dialog-actions"><button id="scene-cancel" type="button">取消</button></div>
+  </dialog>
+  <script src="./scene-files.js"></script>
+  <script src="$GODOT_URL"></script>
+  <script>
+    const GODOT_CONFIG = $GODOT_CONFIG;
+    const engine = new Engine(GODOT_CONFIG);
+    const statusText = document.getElementById('status-text');
+    const progress = document.getElementById('status-progress');
+    function failure(error) {
+      console.error(error);
+      statusText.textContent = String(error.message || error);
+      progress.hidden = true;
+    }
+    if (location.protocol === 'file:') {
+      failure('请通过 HTTP/HTTPS 服务器打开此页面。例如：在项目目录运行 python -m http.server 8000，然后访问 http://localhost:8000/web-dist/。');
+    } else {
+      const missing = Engine.getMissingFeatures({ threads: $GODOT_THREADS_ENABLED });
+      if (missing.length) {
+        failure('浏览器缺少运行所需功能：' + missing.join('、'));
+      } else {
+        engine.startGame({
+          onProgress(current, total) {
+            if (total > 0) {
+              progress.max = total;
+              progress.value = current;
+              statusText.textContent = '正在加载沙盘… ' + Math.round(current / total * 100) + '%';
+            }
+          }
+        }).then(() => document.getElementById('status').remove()).catch(failure);
+      }
+    }
+  </script>
+</body>
+</html>

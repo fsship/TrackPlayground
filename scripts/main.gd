@@ -109,6 +109,7 @@ var ui_time = 0.0
 var preview_time = 0.0
 var pending_confirm: Callable
 var user_dir = "user://layouts"
+var web_files: Node
 
 func _ready() -> void:
 	update_window_scale()
@@ -134,6 +135,10 @@ func _ready() -> void:
 	set_mode(mode)
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(user_dir))
 	toast("欢迎来到轨道工坊。右键旋转视角，滚轮缩放；选择顶部工具开始搭建。", 8.0)
+	if OS.has_feature("web"):
+		web_files = preload("res://scripts/web_files.gd").new()
+		add_child(web_files)
+		web_files.setup(self)
 	if "--self-test" in OS.get_cmdline_user_args():
 		call_deferred("integration_test")
 	if "--flex-test" in OS.get_cmdline_user_args():
@@ -229,6 +234,8 @@ func create_ui() -> void:
 	var font = SystemFont.new()
 	font.font_names = PackedStringArray(["Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC"])
 	theme.default_font = font
+	if OS.has_feature("web"):
+		theme.default_font = preload("res://assets/fonts/NotoSansCJKsc-Regular.otf")
 	theme.default_font_size = 15
 	theme.set_color("font_color", "Label", Color("e0e9e9"))
 	theme.set_color("font_color", "Button", Color("c8d5d8"))
@@ -1612,6 +1619,12 @@ func redo() -> void:
 	sound.play_effect("confirm")
 
 func show_file(save: bool) -> void:
+	if OS.has_feature("web"):
+		if save:
+			web_files.download()
+		else:
+			web_files.open()
+		return
 	file_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE if save else FileDialog.FILE_MODE_OPEN_FILE
 	file_dialog.title = "保存铁路场景" if save else "打开铁路场景"
 	file_dialog.current_dir = ProjectSettings.globalize_path(user_dir)
@@ -1625,18 +1638,25 @@ func file_chosen(path: String) -> void:
 			toast("已保存：" + path, 7)
 			sound.play_effect("confirm")
 	else:
-		var json = JSON.new()
-		if json.parse(FileAccess.get_file_as_string(path)) != OK or not json.data is Dictionary:
-			toast("读取失败：不是有效场景文件", 7)
-			return
-		var problem = validate_snapshot(json.data)
-		if not problem.is_empty():
-			toast("读取失败：" + problem, 9)
-			return
-		push_undo()
-		apply_snapshot(json.data)
-		toast("场景已打开，物理处于暂停状态。", 6)
-		sound.play_effect("confirm")
+		load_layout_text(FileAccess.get_file_as_string(path))
+
+func load_layout_text(text: String) -> bool:
+	var json = JSON.new()
+	if json.parse(text.trim_prefix("\uFEFF")) != OK or not json.data is Dictionary:
+		toast("读取失败：不是有效场景文件", 7)
+		return false
+	var previous = snapshot()
+	# apply_snapshot also validates train routes before modifying the world.
+	# Failed imports must leave both the scene and undo/redo history intact.
+	if not apply_snapshot(json.data):
+		return false
+	undo_stack.append(previous)
+	if undo_stack.size() > 30:
+		undo_stack.pop_front()
+	redo_stack.clear()
+	toast("场景已打开，物理处于暂停状态。可通过撤销恢复原场景。", 6)
+	sound.play_effect("confirm")
+	return true
 
 func save_layout(path: String) -> bool:
 	var file = FileAccess.open(path + ".tmp", FileAccess.WRITE)

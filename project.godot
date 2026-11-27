@@ -28,3 +28,6 @@ common/physics_ticks_per_second=60
 
 [gui]
 theme/default_font_multichannel_signed_distance_field=true
+
+[editor_plugins]
+enabled=PackedStringArray("res://addons/runtime_sources/plugin.cfg")

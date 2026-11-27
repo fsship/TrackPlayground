@@ -1,6 +1,7 @@
 .godot/
 *.log
 build/
+web-dist/
 screenshots/
 test-results/
 *.tmp

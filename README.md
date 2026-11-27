@@ -10,6 +10,23 @@
 
 开发时可在 Godot 打开 `project.godot`，或运行 `./Start.ps1 -Editor`。缺少导入缓存时，EXE 启动器会自动执行首次导入。
 
+## Web 与 Windows 导出
+
+运行 `./Export.ps1` 将 Web 版输出到 `web-dist/index.html`；`./Export.ps1 -Target Windows` 将独立 Windows EXE 输出到 `build/windows/TrackPlayground.exe`；`-Target All` 同时生成两种版本。原有 `TrackPlayground.exe` 启动器和 `Start.ps1` 仍可使用。可加 `-DebugBuild` 导出调试版本。
+
+导出需要与 `runtime/Godot.exe` 匹配的 Godot 4.7.2 官方模板。本工作区已放在 `export_templates/4.7.2.stable/`，新克隆需从官方 `Godot_v4.7.2-stable_export_templates.tpz` 解压其中的 `web_nothreads_{debug,release}.zip` 和 `windows_{debug,release}_x86_64.exe` 到该目录。模板和构建输出不提交到 Git。
+
+在项目目录运行 `python -m http.server 8000 --bind 127.0.0.1`，再访问 `http://localhost:8000/web-dist/`。部署时将 `web-dist/` 中的文件完整上传至任意静态站点目录；HTML、脚本、WASM 和资源包均使用相对路径，支持子目录部署。请通过 HTTP/HTTPS 访问，不能直接双击 HTML 运行。服务器需正确提供 `.wasm` 的 `application/wasm` 类型；生产部署建议启用 gzip/Brotli 压缩。
+
+Web 版使用 WebGL 2.0 与单线程导出，无需配置 COOP/COEP 响应头。中文字体、音效和示例 Mod 均随包提供。浏览器首次交互后才允许声音播放；复杂布局性能取决于浏览器和设备。
+
+项目已启用 `addons/runtime_sources` 导出插件，为两个平台保留运行时直接读取的原始 WAV 和 Mod GLB；导出时请保持该插件启用。浏览器验收脚本为 `tools/test_web.cjs`，依赖和运行方式见文件开头，报告输出到 `test-results/web.json`。
+
+- 点击顶部「打开」：选择本地 `.railway` 文件（仅在浏览器内读取，不上传服务器），或输入场景文件 URL。支持 `./layouts/example.railway` 等相对地址，按当前网页目录解析。
+- 也可通过 `index.html?scene=./layouts/example.railway` 自动加载。完整外站地址应进行 URL 编码；外站需允许 CORS，HTTPS 页面应使用 HTTPS 场景地址。
+- 点击「保存」下载当前 `.railway` 文件，与 Windows 版格式相同。Web 不直接访问本机路径；单个导入文件上限 32 MiB。
+- 场景通过格式、零件和列车路径校验后才替换当前场景，加载后暂停，可撤销恢复。失败时保留当前布局。引用额外 Mod 的场景需要先将相应 Mod 放入项目再重新导出。
+
 ## 功能
 
 - HO 1:87.1 / 16.5 mm 轨距，N 1:160 / 9 mm 轨距。每个场景使用一种比例。
