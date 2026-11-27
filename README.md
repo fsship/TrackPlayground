@@ -22,6 +22,8 @@ Web 版使用 WebGL 2.0 与单线程导出，无需配置 COOP/COEP 响应头。
 
 项目已启用 `addons/runtime_sources` 导出插件，为两个平台保留运行时直接读取的原始 WAV 和 Mod GLB；导出时请保持该插件启用。浏览器验收脚本为 `tools/test_web.cjs`，依赖和运行方式见文件开头，报告输出到 `test-results/web.json`。
 
+Web 音频验收：使用同一测试依赖运行 `node tools/test_web_audio.cjs`，在 Chrome 的最终音频输出处测量点击、鸣笛、行车、暂停、静音和分组音量，报告为 `test-results/web-audio.json`。可设置环境变量 `WEB_URL` 测试已启动的站点。音频总线通过增加 `AudioServer.bus_count` 创建，绕过 Godot 4.7.2 Web `add_bus()` 导致输出断开的[引擎问题 #119026](https://github.com/godotengine/godot/issues/119026)。
+
 - 点击顶部「打开」：选择本地 `.railway` 文件（仅在浏览器内读取，不上传服务器），或输入场景文件 URL。支持 `./layouts/example.railway` 等相对地址，按当前网页目录解析。
 - 也可通过 `index.html?scene=./layouts/example.railway` 自动加载。完整外站地址应进行 URL 编码；外站需允许 CORS，HTTPS 页面应使用 HTTPS 场景地址。
 - 点击「保存」下载当前 `.railway` 文件，与 Windows 版格式相同。Web 不直接访问本机路径；单个导入文件上限 32 MiB。

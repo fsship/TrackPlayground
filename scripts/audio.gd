@@ -26,7 +26,10 @@ var settings_timer: Timer
 func _ready() -> void:
 	for bus_name in [MASTER_BUS, EFFECTS_BUS, TRAINS_BUS]:
 		if AudioServer.get_bus_index(bus_name) < 0:
-			AudioServer.add_bus()
+			# Godot 4.7.2 Web add_bus(-1) misorders sample buses and disconnects
+			# Master from the audio destination (godotengine/godot#119026).
+			# Growing bus_count appends without the broken insertion path.
+			AudioServer.bus_count += 1
 			AudioServer.set_bus_name(AudioServer.bus_count - 1, bus_name)
 		AudioServer.set_bus_send(AudioServer.get_bus_index(bus_name), "Master" if bus_name == MASTER_BUS else MASTER_BUS)
 	for sample_name in SAMPLE_NAMES:
