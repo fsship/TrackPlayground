@@ -16,7 +16,7 @@ const MINT = Color("78dcc1")
 const MUTED = Color("91a5ac")
 const TRAIN_PREVIEW_VALID = Color(0.15, 0.55, 1.0, 0.42)
 const TRAIN_PREVIEW_INVALID = Color(1.0, 0.18, 0.16, 0.42)
-const OPERATE_HINT = "点击列车选中 · 点击道岔切换 · H 鸣笛 · 空格暂停 · 右键旋转 / 中键平移 / 滚轮缩放"
+const OPERATE_HINT = "点击列车选中 · 点击道岔切换 · H 鸣笛 · 空格暂停 · 右键旋转 / 中键或 WASD 平移 / 滚轮缩放"
 const TRACK_HINT = "Tab 切换端点 · 左键铺轨 · R 旋转 15° · F 镜像 · Esc 取消 · Ctrl+Z 撤销"
 var catalog: RailCatalog
 var graph: RailGraph
@@ -598,7 +598,7 @@ func set_mode(value: String) -> void:
 	left_body.add_child(scale_picker)
 	button(left_body, "载入示例布局", func(): confirm("载入 3.4 × 2.6 m 示例布局？当前编辑可以撤销。", func(): push_undo(); make_demo()))
 	button(left_body, "新建空白沙盘", show_new_scene)
-	var hints = {"operate":OPERATE_HINT, "track":track_placement_hint(), "terrain":"按住左键刷地形 · Ctrl+Z 撤销整次笔刷 · 轨道高程独立，填挖地形后可手动整平路基", "scenery":"左键放置布景 · R 旋转 · 橡皮擦删除 · 右键旋转视角 / 中键平移"}
+	var hints = {"operate":OPERATE_HINT, "track":track_placement_hint(), "terrain":"按住左键刷地形 · Ctrl+Z 撤销整次笔刷 · 轨道高程独立，填挖地形后可手动整平路基", "scenery":"左键放置布景 · R 旋转 · 橡皮擦删除 · 右键旋转视角 / 中键或 WASD 平移"}
 	status_label.text = hints[mode]
 	responsive_layout()
 
@@ -1049,6 +1049,7 @@ func _process(dt: float) -> void:
 	if not simulation:
 		return
 	update_train_visuals()
+	update_keyboard_pan(dt)
 	if follow_train and not current_train().is_empty():
 		var t = current_train()
 		camera_target = camera_target.lerp(simulation.car_samples(t)[0].position, minf(dt * 3, 1))
@@ -1087,6 +1088,24 @@ func pan_camera(relative: Vector2) -> void:
 	# Drag the ground with the cursor: screen-down is opposite to ground-forward.
 	camera_target -= (right * relative.x - forward * relative.y) * camera_distance * 0.0013
 	follow_train = false
+
+func update_keyboard_pan(dt: float) -> void:
+	if not get_window().has_focus():
+		return
+	if file_dialog.visible or mod_dialog.visible or confirm_dialog.visible or new_scene_dialog.visible or sound_dialog.visible:
+		return
+	var focus = get_viewport().gui_get_focus_owner()
+	if focus is LineEdit or focus is TextEdit:
+		return
+	if Input.is_key_pressed(KEY_CTRL) or Input.is_key_pressed(KEY_ALT) or Input.is_key_pressed(KEY_META):
+		return
+	var direction = Vector2(
+		float(Input.is_physical_key_pressed(KEY_D)) - float(Input.is_physical_key_pressed(KEY_A)),
+		float(Input.is_physical_key_pressed(KEY_S)) - float(Input.is_physical_key_pressed(KEY_W))
+	)
+	if not direction.is_zero_approx():
+		# Move the viewpoint, opposite to dragging the ground; keep diagonal speed constant.
+		pan_camera(-direction.normalized() * dt * 600.0)
 
 func mouse_world() -> Vector3:
 	var p = get_viewport().get_mouse_position()
