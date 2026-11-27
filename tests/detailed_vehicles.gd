@@ -29,23 +29,38 @@ func clip_z(polygon: Array, plane: float, above: bool) -> Array:
 		previous_inside = inside
 	return result
 
+func model_pose(node: Node3D, root: Node3D) -> Transform3D:
+	var pose = node.transform
+	var parent = node.get_parent()
+	while parent != root:
+		pose = parent.transform * pose
+		parent = parent.get_parent()
+	return pose
+
+func mesh_nodes(node: Node) -> Array:
+	var result = [node] if node is MeshInstance3D else []
+	for child in node.get_children():
+		result.append_array(mesh_nodes(child))
+	return result
+
 func wheel_clearance(model) -> bool:
 	# Clip real static mesh triangles to the wheel's lateral slab, then test
 	# against its full rotational disc. This catches plates or pipe segments
 	# crossing a tyre even when all triangle corners are outside the wheel.
-	for node in model.model.get_children():
+	for node in mesh_nodes(model.model):
 		if not node is MeshInstance3D or model.axles.any(func(axle): return axle.node == node):
 			continue
 		var vertices: PackedVector3Array = node.mesh.get_faces()
+		var pose = model_pose(node, model.model)
 		for i in range(0, vertices.size(), 3):
-			var a: Vector3 = node.transform * vertices[i]
-			var b: Vector3 = node.transform * vertices[i + 1]
-			var c: Vector3 = node.transform * vertices[i + 2]
+			var a: Vector3 = pose * vertices[i]
+			var b: Vector3 = pose * vertices[i + 1]
+			var c: Vector3 = pose * vertices[i + 2]
 			if minf(a.y, minf(b.y, c.y)) > 1.04:
 				continue
 			for axle in model.axles:
 				var r: float = axle.radius + 0.025
-				var center = Vector2(axle.node.position.x, axle.radius)
+				var center = Vector2(model_pose(axle.node, model.model).origin.x, axle.radius)
 				if minf(a.x, minf(b.x, c.x)) > center.x + r or maxf(a.x, maxf(b.x, c.x)) < center.x - r or minf(a.y, minf(b.y, c.y)) > center.y + r:
 					continue
 				for side in [-1, 1]:

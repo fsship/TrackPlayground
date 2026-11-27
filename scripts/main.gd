@@ -147,6 +147,8 @@ func _ready() -> void:
 		call_deferred("steam_test")
 	if "--vehicles-test" in OS.get_cmdline_user_args():
 		call_deferred("vehicles_test")
+	if "--bogies-test" in OS.get_cmdline_user_args():
+		call_deferred("bogies_test")
 	if "--connections-test" in OS.get_cmdline_user_args():
 		call_deferred("connections_test")
 	if "--collisions-test" in OS.get_cmdline_user_args():
@@ -959,6 +961,7 @@ func update_train_visuals() -> void:
 			if train.has("derailed_cars"):
 				node.basis = sample.basis
 				node.position = sample.position
+				simulation.RunningGear.apply(node, sample)
 				if node.has_method("sync_motion"):
 					node.sync_motion(train.distance_m, train.velocity, simulation.paused, true)
 				continue
@@ -968,8 +971,7 @@ func update_train_visuals() -> void:
 				continue
 			node.basis = Basis(tangent, side.cross(tangent).normalized(), side)
 			node.position = sample.position + Vector3.UP * 0.08
-			if train.fault and "脱轨" in train.state:
-				node.rotate_object_local(Vector3.RIGHT, 0.14)
+			simulation.RunningGear.apply(node, sample)
 			if node.has_method("sync_motion"):
 				node.sync_motion(train.distance_m, train.velocity, simulation.paused, false)
 		train_connections[train.id].update_from_cars(train_nodes[train.id])
@@ -1306,6 +1308,7 @@ func update_train_preview(hit: Dictionary) -> void:
 		var node: Node3D = preview.get_child(i)
 		node.basis = Basis(tangent, side.cross(tangent).normalized(), side)
 		node.position = sample.position + Vector3.UP * 0.08
+		simulation.RunningGear.apply(node, sample)
 	preview.get_node("Connections").update_from_cars(preview.get_children().slice(0, samples.size()))
 	preview.visible = true
 
@@ -1793,6 +1796,8 @@ func integration_test() -> void:
 	failures += await detailed_vehicles_test.run(self)
 	var connections_test = load("res://tests/vehicle_connections.gd").new()
 	failures += await connections_test.run(self)
+	var bogies = load("res://tests/bogies.gd").new()
+	failures += await bogies.run(self)
 	var sound_test = load("res://tests/audio.gd").new()
 	failures += await sound_test.run(self)
 	print("INTEGRATION_RESULT failures=" + str(failures))
@@ -1832,4 +1837,10 @@ func vehicles_test() -> void:
 	await get_tree().process_frame
 	var test = load("res://tests/detailed_vehicles.gd").new()
 	var failures = await test.run(self, "--vehicles-capture" in OS.get_cmdline_user_args())
+	get_tree().quit(1 if failures > 0 else 0)
+
+func bogies_test() -> void:
+	await get_tree().process_frame
+	var test = load("res://tests/bogies.gd").new()
+	var failures = await test.run(self, "--bogies-capture" in OS.get_cmdline_user_args())
 	get_tree().quit(1 if failures > 0 else 0)

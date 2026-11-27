@@ -15,6 +15,7 @@ var derailments = true
 var collision_physics = true
 
 const Collisions = preload("res://scripts/vehicle_collisions.gd")
+const RunningGear = preload("res://scripts/running_gear.gd")
 
 func _init(g: RailGraph, c: RailCatalog) -> void:
 	graph = g
@@ -64,6 +65,10 @@ func train_placement(cars: Array, edge: String, distance: float, reversed: bool 
 	if train.s < consist_length(cars) + 0.04:
 		result.error = "车尾方向的轨道长度不足"
 		return result
+	for sample in car_samples(train):
+		if not sample.get("bogie_fit", true):
+			result.error = "曲线或坡度变化过急，转向架轴距无法贴合轨道"
+			return result
 	var occupied = occupancy(train)
 	for intervals in occupied.values():
 		for i in intervals.size():
@@ -158,7 +163,10 @@ func sample_route(train: Dictionary, s: float, extrapolate: bool = false) -> Dic
 			return sample
 		d -= length
 	var last: Dictionary = train.route[-1]
-	return graph.sample(last.edge, graph.edges[last.edge].length, last.rev)
+	var sample = graph.sample(last.edge, graph.edges[last.edge].length, last.rev)
+	if extrapolate:
+		sample.position += sample.tangent * d
+	return sample
 
 func car_samples(train: Dictionary, extrapolate: bool = false) -> Array:
 	var result = []
@@ -166,11 +174,17 @@ func car_samples(train: Dictionary, extrapolate: bool = false) -> Array:
 		for i in train.cars.size():
 			var pose: Dictionary = train.derailed_cars[i]
 			var basis = Basis(Quaternion(pose.rotation[0], pose.rotation[1], pose.rotation[2], pose.rotation[3]))
-			result.append({"position":RailGraph.array_v(pose.position), "tangent":basis.x, "basis":basis, "vehicle":train.cars[i], "radius":0.0})
+			result.append({"position":RailGraph.array_v(pose.position), "tangent":basis.x, "basis":basis, "vehicle":train.cars[i], "radius":0.0, "bogie_rotations":pose.get("bogie_rotations", [])})
 		return result
 	var offset = 0.0
+	var sampler = RunningGear.RouteSampler.new(self, train)
 	for id in train.cars:
 		var length = vehicle_length(id)
+		var articulated = RunningGear.sample(sampler, train, train.s - offset - length * 0.5, catalog.vehicles[id], extrapolate)
+		if not articulated.is_empty():
+			result.append(articulated)
+			offset += length
+			continue
 		# Invalid placement previews extend beyond a dead end instead of piling
 		# every car up at the endpoint. Running trains keep the clamped behavior.
 		var center = sample_route(train, train.s - offset - length * 0.5, extrapolate)
@@ -279,7 +293,8 @@ func derail(train: Dictionary, reason: String = "轨道尽头脱轨", impact_pos
 	# Keep the last valid route position for recovery, and hand each car's
 	# pose and momentum to the 3D rigid-body solver. Arrays survive JSON saves.
 	var poses = []
-	for sample in car_samples(train):
+	var samples = car_samples(train)
+	for sample in samples:
 		var tangent: Vector3 = sample.tangent
 		var side = tangent.cross(Vector3.UP).normalized()
 		var rotation = Basis(tangent, side.cross(tangent).normalized(), side).get_rotation_quaternion()
@@ -288,6 +303,8 @@ func derail(train: Dictionary, reason: String = "轨道尽头脱轨", impact_pos
 			"linear":RailGraph.v_array(tangent * train.velocity * 10.0 / ratio()),
 			"angular":[0.0, 0.0, 0.0], "sleeping":false})
 	train.derailed_cars = poses if impact_poses.is_empty() else impact_poses
+	for i in samples.size():
+		train.derailed_cars[i].bogie_rotations = RunningGear.rotations(samples[i])
 	train.fault = true
 	train.target = 0.0
 	train.traction = 0.0
@@ -393,6 +410,9 @@ func _advance_train(train: Dictionary, dt: float) -> void:
 	var slope_force = 0.0
 	var max_lateral = 0.0
 	for sample in car_samples(train):
+		if not sample.get("bogie_fit", true):
+			fault(train, "转向架轴距无法贴合轨道 · 已停车")
+			return
 		var car: Dictionary = catalog.vehicles[sample.vehicle]
 		total_mass += car.mass_kg
 		slope_force += car.mass_kg * 9.81 * sample.tangent.y

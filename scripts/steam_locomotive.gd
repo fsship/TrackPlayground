@@ -165,8 +165,12 @@ static func create(is_tender: bool, ratio: float) -> Node3D:
 	root.add_child(root.model)
 	root._instance("tender" if is_tender else "body", root.model)
 	if is_tender:
-		for x in [-2.95, -1.55, 1.55, 2.95]:
-			root._axle(x, 0.48, "small_wheel")
+		var spec = preload("res://scripts/running_gear.gd").layout({"id":"core:steam_tender"})
+		for x in [-spec.center, spec.center]:
+			var pivot = preload("res://scripts/running_gear.gd").add_pivot(root, root.model, x, spec.height, root.factor)
+			root._instance("tender_bogie", pivot).position.y = -spec.height
+			for offset in spec.axles:
+				root._axle(offset, spec.radius, "small_wheel", pivot, spec.height)
 		root._nameplate("SY 0808", Vector3(0, 2.45, 1.535), 0.0, 0.008)
 		root._nameplate("SY 0808", Vector3(0, 2.45, -1.535), PI, 0.008)
 	else:
@@ -196,9 +200,9 @@ func _instance(key: String, parent: Node3D) -> MeshInstance3D:
 	parent.add_child(node)
 	return node
 
-func _axle(x: float, radius: float, key: String) -> void:
-	var wheel = _instance(key, model)
-	wheel.position = Vector3(x, radius, 0)
+func _axle(x: float, radius: float, key: String, parent: Node3D = null, pivot_height: float = 0.0) -> void:
+	var wheel = _instance(key, model if parent == null else parent)
+	wheel.position = Vector3(x, radius - pivot_height, 0)
 	axles.append({"node":wheel, "radius":radius})
 
 func _nameplate(text: String, pos: Vector3, yaw: float, pixel: float) -> void:
@@ -280,6 +284,7 @@ static func _prepare_meshes() -> void:
 		shared_materials[key] = mat
 	meshes.body = _body()
 	meshes.tender = _tender()
+	meshes.tender_bogie = _tender_bogie()
 	meshes.driver = _wheelset(DRIVER_RADIUS, true)
 	meshes.small_wheel = _wheelset(0.48, false)
 	var b = Builder.new()
@@ -648,15 +653,19 @@ static func _tender() -> ArrayMesh:
 		b.line([Vector3(-3.88, 0.78, z), Vector3(-3.88, 3.16, z), Vector3(-3.50, 3.16, z)], 0.03, "steel")
 	for i in 8:
 		b.pipe(Vector3(-3.89, 0.85 + i * 0.30, -0.35), Vector3(-3.89, 0.85 + i * 0.30, 0.35), 0.027, "steel")
-	for x in [-2.25, 2.25]:
-		b.box(Vector3(2.05, 0.28, 1.02), Vector3(x, 0.61, 0), "black")
-		for side in [-1, 1]:
-			b.box(Vector3(2.08, 0.14, 0.12), Vector3(x, 0.62, side * 0.91), "darksteel")
-			for axle in [-0.7, 0.7]:
-				b.box(Vector3(0.24, 0.28, 0.15), Vector3(x + axle, 0.49, side * 0.91), "black")
-			for spring in [-0.30, 0.0, 0.30]:
-				for j in 5:
-					b.ring(0.065, 0.095, 0.032, Vector3(x + spring, 0.73 + j * 0.045, side * 0.89), "steel")
 	_buffers(b, 3.5, 3.05)
 	_buffers(b, -3.5, 3.05)
+	return b.finish(shared_materials)
+
+static func _tender_bogie() -> ArrayMesh:
+	var b = Builder.new()
+	b.box(Vector3(2.05, 0.28, 1.02), Vector3(0, 0.61, 0), "black")
+	b.cylinder(0.22, 0.18, Vector3(0, 0.90, 0), "darksteel")
+	for side in [-1, 1]:
+		b.box(Vector3(2.08, 0.14, 0.12), Vector3(0, 0.62, side * 0.91), "darksteel")
+		for axle in [-0.7, 0.7]:
+			b.box(Vector3(0.24, 0.28, 0.15), Vector3(axle, 0.49, side * 0.91), "black")
+		for spring in [-0.30, 0.0, 0.30]:
+			for j in 5:
+				b.ring(0.065, 0.095, 0.032, Vector3(spring, 0.73 + j * 0.045, side * 0.89), "steel")
 	return b.finish(shared_materials)

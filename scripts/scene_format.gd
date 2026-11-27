@@ -97,6 +97,14 @@ static func validate(data: Dictionary, catalog: RailCatalog) -> String:
 					norm += v * v
 				if absf(norm - 1.0) > 0.01:
 					return "脱轨车辆旋转未归一化"
+				var bogies = pose.get("bogie_rotations", [])
+				if not bogies is Array or bogies.size() > 2:
+					return "转向架姿态数量不正确"
+				for q in bogies:
+					if not q is Array or q.size() != 4 or not q.all(func(v): return number(v, -1.001, 1.001)):
+						return "转向架姿态不正确"
+					if absf(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3] - 1.0) > 0.01:
+						return "转向架旋转未归一化"
 		train_ids[t.id] = true
 		max_train = maxi(max_train, int(t.id))
 	if not integer(data.get("next_train"), max_train + 1, 10000001):

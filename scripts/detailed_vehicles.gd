@@ -1,7 +1,8 @@
 extends Node3D
 ## Original rolling-stock models in prototype metres. Shared static meshes
-## are merged by material; wheelsets alone rotate with travelled distance.
+## are merged by material; bogies articulate and wheelsets roll independently.
 const Builder = preload("res://scripts/steam_locomotive.gd").Builder
+const RunningGear = preload("res://scripts/running_gear.gd")
 static var kits: Dictionary = {}
 var model: Node3D
 var axles: Array = []
@@ -24,11 +25,12 @@ static func create(def: Dictionary, ratio: float) -> Node3D:
 	root.add_child(root.model)
 	root._mesh(kit.body, root.model, "Body")
 	for center in kit.bogie_centers:
-		var bogie = root._mesh(kit.bogie, root.model, "Bogie")
-		bogie.position.x = center
+		var pivot = RunningGear.add_pivot(root, root.model, center, kit.pivot_height, 10.0 / ratio)
+		var bogie = root._mesh(kit.bogie, pivot, "Bogie")
+		bogie.position.y = -kit.pivot_height
 		for offset in kit.axle_offsets:
-			var wheel = root._mesh(kit.wheel, root.model, "Wheelset")
-			wheel.position = Vector3(center + offset, kit.radius, 0)
+			var wheel = root._mesh(kit.wheel, pivot, "Wheelset")
+			wheel.position = Vector3(offset, kit.radius - kit.pivot_height, 0)
 			root.axles.append({"node":wheel, "radius":kit.radius})
 	for plate in kit.labels:
 		root._label(plate[0], plate[1], plate[2], plate[3], plate[4])
@@ -162,9 +164,10 @@ static func _build(def: Dictionary) -> Dictionary:
 	var loco = def.kind == "locomotive"
 	var mountain = loco and def.id != "core:diesel" and def.id != "core:electric"
 	var electric = def.id == "core:electric"
-	var radius = 0.50 if loco else 0.46
-	var center = l * (0.315 if loco else 0.32)
-	var offsets = [-1.55, 0.0, 1.55] if loco and not mountain else [-1.08, 1.08]
+	var running_gear = RunningGear.layout(def)
+	var radius: float = running_gear.radius
+	var center: float = running_gear.center
+	var offsets: Array = running_gear.axles
 	var materials = _materials(Color(str(def.get("color", "638c6a"))))
 	var b = Builder.new()
 	_chassis(b, def, center, offsets, radius)
@@ -190,7 +193,7 @@ static func _build(def: Dictionary) -> Dictionary:
 		_tanker(b, l, w, h)
 		for side in [-1, 1]:
 			labels.append(["TP  70418", Vector3(-1.85, 2.20, side * 1.055), 0.0 if side > 0 else PI, 0.006, Color("263940")])
-	return {"body":b.finish(materials), "bogie":_bogie(offsets, radius, materials), "wheel":_wheelset(radius, materials), "bogie_centers":[-center, center], "axle_offsets":offsets, "radius":radius, "labels":labels}
+	return {"body":b.finish(materials), "bogie":_bogie(offsets, radius, materials), "wheel":_wheelset(radius, materials), "bogie_centers":[-center, center], "pivot_height":running_gear.height, "axle_offsets":offsets, "radius":radius, "labels":labels}
 
 static func _wheelset(r: float, materials: Dictionary) -> ArrayMesh:
 	var b = Builder.new()

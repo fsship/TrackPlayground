@@ -116,10 +116,11 @@ static func vehicle(def: Dictionary, ratio: float) -> Node3D:
 	var black = Color("263139")
 	box(root, Vector3(l, h * 0.12, w), Vector3(0, h * 0.22, 0), black)
 	for bx in [-0.32, 0.32]:
-		box(root, Vector3(l * 0.18, h * 0.13, w * 0.66), Vector3(l * bx, h * 0.13, 0), Color("303a3a"))
+		var pivot = preload("res://scripts/running_gear.gd").add_pivot(root, root, l * bx, h * 0.18, 1.0)
+		box(pivot, Vector3(l * 0.18, h * 0.13, w * 0.66), Vector3(0, -h * 0.05, 0), Color("303a3a"))
 		for axle in [-0.05, 0.05]:
 			for side in [-1, 1]:
-				var wheel = cylinder(root, h * 0.105, w * 0.1, Vector3(l * (bx + axle), h * 0.105, side * w * 0.38), black)
+				var wheel = cylinder(pivot, h * 0.105, w * 0.1, Vector3(l * axle, -h * 0.075, side * w * 0.38), black)
 				wheel.rotation.x = PI / 2
 	if def.kind == "tanker":
 		var tank = cylinder(root, w * 0.47, l * 0.9, Vector3(0, h * 0.57, 0), color)
