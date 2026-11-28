@@ -115,4 +115,9 @@ static func validate(data: Dictionary, catalog: RailCatalog) -> String:
 	var cam = data.get("camera", {})
 	if not cam is Dictionary or not vector(cam.get("target", [0,0,0])) or not number(cam.get("yaw", 0), -10000, 10000) or not number(cam.get("pitch", 0.88), 0.1, 1.55) or not number(cam.get("distance", 34), 3, MAX_CAMERA_DISTANCE):
 		return "相机参数不正确"
+	var orbit = cam.get("orbit_rotation", [0, 0, 0, 1])
+	if not orbit is Array or orbit.size() != 4 or not orbit.all(func(v): return number(v, -1.001, 1.001)):
+		return "相机旋转不正确"
+	if absf(orbit[0]*orbit[0] + orbit[1]*orbit[1] + orbit[2]*orbit[2] + orbit[3]*orbit[3] - 1.0) > 0.01:
+		return "相机旋转未归一化"
 	return ""

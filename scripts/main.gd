@@ -41,7 +41,17 @@ var camera_target = Vector3(0, 0, 0)
 var camera_yaw = -0.63
 var camera_pitch = 0.82
 var camera_distance = 33.0
+var camera_orbit_basis = Basis.IDENTITY
 var follow_train = false
+var follow_car_index = 0
+var follow_rotation = false
+var follow_bound_train = -1
+var follow_bound_car = -1
+var follow_target_offset = Vector3.ZERO
+var follow_basis_offset = Basis.IDENTITY
+var follow_button: CheckButton
+var follow_car_picker: OptionButton
+var follow_rotation_button: CheckButton
 var mode = "operate"
 var selected_track = "core:HO:straight"
 var track_placement_endpoint = 0
@@ -155,6 +165,8 @@ func _ready() -> void:
 		call_deferred("collisions_test")
 	if "--audio-test" in OS.get_cmdline_user_args():
 		call_deferred("audio_test")
+	if "--camera-test" in OS.get_cmdline_user_args():
+		call_deferred("camera_test")
 	if "--capture" in OS.get_cmdline_user_args():
 		call_deferred("capture_preview")
 
@@ -335,10 +347,21 @@ func create_ui() -> void:
 	telemetry = label(right_body, "", 13, MUTED)
 	telemetry.custom_minimum_size.y = 170
 	telemetry.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	var follow = CheckButton.new()
-	follow.text = "跟随选中列车"
-	follow.toggled.connect(func(value): follow_train = value)
-	right_body.add_child(follow)
+	follow_button = CheckButton.new()
+	follow_button.text = "跟随选中车辆"
+	follow_button.toggled.connect(set_follow_enabled)
+	right_body.add_child(follow_button)
+	follow_car_picker = OptionButton.new()
+	follow_car_picker.fit_to_longest_item = false
+	follow_car_picker.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	follow_car_picker.tooltip_text = "选择跟随的具体车辆，按编组从前到后编号（含机车）"
+	follow_car_picker.item_selected.connect(select_follow_car)
+	right_body.add_child(follow_car_picker)
+	follow_rotation_button = CheckButton.new()
+	follow_rotation_button.text = "视角随车厢转动"
+	follow_rotation_button.tooltip_text = "固定相机相对车厢的位置与朝向；平移、旋转和缩放可调整固定视角"
+	follow_rotation_button.toggled.connect(set_follow_rotation)
+	right_body.add_child(follow_rotation_button)
 	button(right_body, "复位 / 脱轨列车重新上轨", func():
 		var t = current_train()
 		if not t.is_empty():
@@ -348,6 +371,7 @@ func create_ui() -> void:
 		var t = current_train()
 		if not t.is_empty():
 			push_undo()
+			set_follow_enabled(false)
 			simulation.remove_train(t.id)
 			sound.play_effect("remove")
 			selected_train = simulation.trains[0].id if not simulation.trains.is_empty() else -1
@@ -380,7 +404,7 @@ func create_ui() -> void:
 	var ar = HBoxContainer.new()
 	actions.add_child(ar)
 	button(ar, "↶ 撤销", undo)
-	button(ar, "俯视", func(): camera_pitch = 1.49; follow_train = false)
+	button(ar, "俯视", func(): camera_pitch = 1.49)
 	button(ar, "全景", reset_camera)
 	performance_label = label(actions, "", 11, MUTED)
 	performance_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
@@ -884,6 +908,10 @@ func empty_scene(refresh: bool = true, width: float = Terrain.WIDTH, depth: floa
 	brush_active = false
 	placing_train = false
 	follow_train = false
+	follow_car_index = 0
+	follow_bound_train = -1
+	follow_bound_car = -1
+	camera_orbit_basis = Basis.IDENTITY
 	selected_train = -1
 	simulation.paused = true
 	derailment.clear()
@@ -999,7 +1027,7 @@ func current_train() -> Dictionary:
 func refresh_train_list() -> void:
 	clear_children(train_buttons)
 	for t in simulation.trains:
-		var b = button(train_buttons, ("●  " if t.id == selected_train else "○  ") + t.name, func(): selected_train = t.id; refresh_train_list())
+		var b = button(train_buttons, ("●  " if t.id == selected_train else "○  ") + t.name, func(): select_train_car(t.id))
 		if t.id == selected_train:
 			b.add_theme_color_override("font_color", MINT)
 	if simulation.trains.is_empty():
@@ -1011,6 +1039,7 @@ func refresh_train_list() -> void:
 			maximum = minf(maximum, catalog.vehicles[id].max_kmh)
 		speed_slider.max_value = maximum
 		speed_slider.set_value_no_signal(train.target)
+	refresh_follow_controls()
 
 func refresh_stats() -> void:
 	if not is_instance_valid(rail_count):
@@ -1051,10 +1080,8 @@ func _process(dt: float) -> void:
 	if not simulation:
 		return
 	update_train_visuals()
+	update_camera()
 	update_keyboard_pan(dt)
-	if follow_train and not current_train().is_empty():
-		var t = current_train()
-		camera_target = camera_target.lerp(simulation.car_samples(t)[0].position, minf(dt * 3, 1))
 	update_camera()
 	sound.sync_trains(simulation.trains, train_nodes, camera.global_position, simulation.paused, dt)
 	preview_time += dt
@@ -1074,22 +1101,110 @@ func _process(dt: float) -> void:
 			toast_label.text = ""
 
 func update_camera() -> void:
-	camera.position = camera_target + Vector3(sin(camera_yaw) * cos(camera_pitch), sin(camera_pitch), cos(camera_yaw) * cos(camera_pitch)) * camera_distance
-	camera.look_at(camera_target)
+	update_follow_camera()
+	var offset = Vector3(sin(camera_yaw) * cos(camera_pitch), sin(camera_pitch), cos(camera_yaw) * cos(camera_pitch)) * camera_distance
+	camera.position = camera_target + camera_orbit_basis * offset
+	camera.look_at(camera_target, camera_orbit_basis.y)
+
+func follow_car_node() -> Node3D:
+	var nodes: Array = train_nodes.get(selected_train, [])
+	if nodes.is_empty():
+		return null
+	follow_car_index = clampi(follow_car_index, 0, nodes.size() - 1)
+	return nodes[follow_car_index]
+
+func follow_frame(car: Node3D) -> Transform3D:
+	return Transform3D(car.global_basis.orthonormalized() if follow_rotation else Basis.IDENTITY, car.global_position)
+
+func update_follow_camera() -> void:
+	if not follow_train:
+		return
+	var car = follow_car_node()
+	if car == null:
+		set_follow_enabled(false)
+		return
+	var frame = follow_frame(car)
+	if follow_bound_train != selected_train or follow_bound_car != follow_car_index:
+		# Recenter on the chosen car while preserving the current viewing angle.
+		follow_bound_train = selected_train
+		follow_bound_car = follow_car_index
+		follow_target_offset = Vector3.ZERO
+		follow_basis_offset = frame.basis.inverse() * camera_orbit_basis
+		refresh_follow_controls()
+	camera_target = frame * follow_target_offset
+	camera_orbit_basis = (frame.basis * follow_basis_offset).orthonormalized()
+
+func set_follow_enabled(enabled: bool) -> void:
+	follow_train = enabled and follow_car_node() != null
+	follow_bound_train = -1
+	follow_bound_car = -1
+	refresh_follow_controls()
+	if follow_train:
+		update_camera()
+
+func set_follow_rotation(enabled: bool) -> void:
+	# Capture the current view in the new frame; switching modes must not jump.
+	update_camera()
+	follow_rotation = enabled
+	var car = follow_car_node()
+	if follow_train and car != null:
+		var frame = follow_frame(car)
+		follow_target_offset = frame.affine_inverse() * camera_target
+		follow_basis_offset = frame.basis.inverse() * camera_orbit_basis
+	refresh_follow_controls()
+
+func select_train_car(train_id: int, car_index: int = 0) -> void:
+	selected_train = train_id
+	follow_car_index = car_index
+	refresh_train_list()
+	update_camera()
+
+func select_follow_car(index: int) -> void:
+	follow_car_index = index
+	update_camera()
+	refresh_follow_controls()
+
+func refresh_follow_controls() -> void:
+	if not is_instance_valid(follow_button):
+		return
+	var train = current_train()
+	var available = not train.is_empty() and not train.cars.is_empty()
+	if not available:
+		follow_train = false
+		follow_bound_train = -1
+		follow_bound_car = -1
+	follow_button.disabled = not available
+	follow_button.set_pressed_no_signal(follow_train)
+	follow_car_picker.clear()
+	follow_car_picker.disabled = not available
+	if available:
+		follow_car_index = clampi(follow_car_index, 0, train.cars.size() - 1)
+		for i in train.cars.size():
+			follow_car_picker.add_item("第 %d 辆 · %s" % [i + 1, catalog.vehicles[train.cars[i]].name])
+		follow_car_picker.select(follow_car_index)
+	else:
+		follow_car_index = 0
+		follow_car_picker.add_item("暂无车辆")
+	follow_rotation_button.disabled = not available
+	follow_rotation_button.set_pressed_no_signal(follow_rotation)
 
 func reset_camera() -> void:
+	set_follow_enabled(false)
 	camera_target = Vector3(0, 0, 0)
+	camera_orbit_basis = Basis.IDENTITY
 	camera_yaw = -0.55
 	camera_pitch = 0.88
 	camera_distance = clampf(34.0 * maxf(terrain.width / Terrain.WIDTH, terrain.depth / Terrain.DEPTH), 3.0, RailSceneFormat.MAX_CAMERA_DISTANCE)
-	follow_train = false
 
 func pan_camera(relative: Vector2) -> void:
 	var right = camera.global_basis.x
-	var forward = Vector3(right.z, 0, -right.x)
+	var forward = camera_orbit_basis.y.cross(right).normalized()
 	# Drag the ground with the cursor: screen-down is opposite to ground-forward.
 	camera_target -= (right * relative.x - forward * relative.y) * camera_distance * 0.0013
-	follow_train = false
+	if follow_train:
+		var car = follow_car_node()
+		if car != null:
+			follow_target_offset = follow_frame(car).affine_inverse() * camera_target
 
 func update_keyboard_pan(dt: float) -> void:
 	if not get_window().has_focus():
@@ -1438,12 +1553,20 @@ func canvas_click() -> void:
 				toast("编组已就位，使用右侧滑块调速。")
 				sound.play_effect("couple")
 			return
+		var closest_train = -1
+		var closest_car = 0
+		var closest_distance = 1.7
 		for t in simulation.trains:
-			for sample in simulation.car_samples(t):
-				if sample.position.distance_to(hit.position) < 1.7:
-					selected_train = t.id
-					refresh_train_list()
-					return
+			var samples = simulation.car_samples(t)
+			for i in samples.size():
+				var distance: float = samples[i].position.distance_to(hit.position)
+				if distance < closest_distance:
+					closest_distance = distance
+					closest_train = t.id
+					closest_car = i
+		if closest_train >= 0:
+			select_train_car(closest_train, closest_car)
+			return
 		if catalog.tracks[hit.part.definition].kind == "turnout":
 			if simulation.occupied_part(hit.part.uid):
 				toast("道岔正被列车占用，无法扳动。")
@@ -1615,7 +1738,8 @@ func show_mods() -> void:
 	mod_dialog.popup_centered()
 
 func snapshot() -> Dictionary:
-	return {"format":"track-playground", "version":1, "scale":graph.scale_name, "sandbox":{"width":terrain.width,"depth":terrain.depth}, "parts":graph.parts.duplicate(true), "next_part":graph.next_uid, "scenery":scenery_items.duplicate(true), "terrain":Array(terrain.heights), "paint":Array(terrain.paints), "trains":simulation.trains.duplicate(true), "next_train":simulation.next_uid, "physics":{"wet":simulation.wet_rails,"derailments":simulation.derailments,"collisions":simulation.collision_physics}, "camera":{"target":Graph.v_array(camera_target),"yaw":camera_yaw,"pitch":camera_pitch,"distance":camera_distance}, "required_mods":catalog.packages.map(func(p): return p.id)}
+	var q = camera_orbit_basis.get_rotation_quaternion()
+	return {"format":"track-playground", "version":1, "scale":graph.scale_name, "sandbox":{"width":terrain.width,"depth":terrain.depth}, "parts":graph.parts.duplicate(true), "next_part":graph.next_uid, "scenery":scenery_items.duplicate(true), "terrain":Array(terrain.heights), "paint":Array(terrain.paints), "trains":simulation.trains.duplicate(true), "next_train":simulation.next_uid, "physics":{"wet":simulation.wet_rails,"derailments":simulation.derailments,"collisions":simulation.collision_physics}, "camera":{"target":Graph.v_array(camera_target),"yaw":camera_yaw,"pitch":camera_pitch,"distance":camera_distance,"orbit_rotation":[q.x,q.y,q.z,q.w]}, "required_mods":catalog.packages.map(func(p): return p.id)}
 
 func push_undo() -> void:
 	undo_stack.append(snapshot())
@@ -1735,6 +1859,8 @@ func apply_snapshot(data: Dictionary) -> bool:
 		add_scenery(item.definition, Graph.array_v(item.position), float(item.get("yaw", 0)))
 	simulation.trains = data.trains.duplicate(true)
 	for train in simulation.trains:
+		# JSON numbers are floats; node dictionaries and train selection use int IDs.
+		train.id = int(train.id)
 		simulation.refresh_route(train)
 	simulation.next_uid = int(data.get("next_train", 1))
 	simulation.paused = true
@@ -1747,6 +1873,8 @@ func apply_snapshot(data: Dictionary) -> bool:
 	camera_yaw = cam.get("yaw", -0.55)
 	camera_pitch = cam.get("pitch", 0.88)
 	camera_distance = cam.get("distance", 34.0)
+	var orbit_rotation = cam.get("orbit_rotation", [0, 0, 0, 1])
+	camera_orbit_basis = Basis(Quaternion(orbit_rotation[0], orbit_rotation[1], orbit_rotation[2], orbit_rotation[3]).normalized())
 	selected_track = "core:" + graph.scale_name + ":straight"
 	rebuild_rails()
 	rebuild_trains()
@@ -1800,7 +1928,15 @@ func integration_test() -> void:
 	failures += await bogies.run(self)
 	var sound_test = load("res://tests/audio.gd").new()
 	failures += await sound_test.run(self)
+	var camera_follow_test = load("res://tests/camera_follow.gd").new()
+	failures += await camera_follow_test.run(self)
 	print("INTEGRATION_RESULT failures=" + str(failures))
+	get_tree().quit(1 if failures > 0 else 0)
+
+func camera_test() -> void:
+	await get_tree().process_frame
+	var test = load("res://tests/camera_follow.gd").new()
+	var failures = await test.run(self, "--camera-capture" in OS.get_cmdline_user_args())
 	get_tree().quit(1 if failures > 0 else 0)
 
 func flex_test() -> void:
