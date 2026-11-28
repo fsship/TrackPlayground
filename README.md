@@ -2,6 +2,8 @@
 
 可离线运行的 Godot 4 原生 3D 模型铁路模拟器，包含源代码、本机运行时、示例布局与可用的 Mod 数据包。
 
+**[在线预览 · 在浏览器中体验轨道工坊](https://fsship.github.io/TrackPlayground/)**
+
 ## 启动
 
 双击 **TrackPlayground.exe**，或运行 `启动轨道工坊.cmd`。
