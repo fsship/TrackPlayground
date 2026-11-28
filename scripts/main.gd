@@ -86,6 +86,7 @@ var train_preview_material: StandardMaterial3D
 var undo_stack: Array = []
 var redo_stack: Array = []
 var ui: Control
+var restore_ui_button: Button
 var top_panel: PanelContainer
 var bottom_panel: PanelContainer
 var left_panel: PanelContainer
@@ -267,6 +268,18 @@ func create_ui() -> void:
 	theme.set_stylebox("grabber_area", "HSlider", style(MINT, 3))
 	theme.set_stylebox("grabber_area_highlight", "HSlider", style(AMBER, 3))
 	ui.theme = theme
+	# Keep the restore control outside the HUD so it remains available when hidden.
+	restore_ui_button = button(layer, "显示 UI", func(): set_ui_visible(true))
+	restore_ui_button.theme = theme
+	restore_ui_button.tooltip_text = "恢复工具栏与两侧面板"
+	restore_ui_button.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
+	restore_ui_button.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	restore_ui_button.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	restore_ui_button.offset_left = -120
+	restore_ui_button.offset_top = -56
+	restore_ui_button.offset_right = -16
+	restore_ui_button.offset_bottom = -16
+	restore_ui_button.hide()
 
 	var top = panel(Vector2(16, 16), Vector2(-16, 86), Vector2(0, 0), Vector2(1, 0))
 	top_panel = top
@@ -290,6 +303,7 @@ func create_ui() -> void:
 	button(top_row, "声音", func(): sound_dialog.popup_centered())
 	pause_button = button(top_row, "Ⅱ 暂停", toggle_pause)
 	pause_button.custom_minimum_size.x = 100
+	button(top_row, "隐藏 UI", func(): set_ui_visible(false))
 
 	var left = panel(Vector2(16, 100), Vector2(288, -110), Vector2(0, 0), Vector2(0, 1))
 	left_panel = left
@@ -457,6 +471,16 @@ func create_ui() -> void:
 	left_body.minimum_size_changed.connect(responsive_layout)
 	right_body.minimum_size_changed.connect(responsive_layout)
 	responsive_layout()
+
+func set_ui_visible(value: bool) -> void:
+	var focus = get_viewport().gui_get_focus_owner()
+	if focus != null and (ui.is_ancestor_of(focus) or focus == restore_ui_button):
+		focus.release_focus()
+	ui.visible = value
+	restore_ui_button.visible = not value
+	brush_active = false
+	if value:
+		responsive_layout()
 
 func responsive_layout() -> void:
 	if not layout_pending:
@@ -1230,8 +1254,8 @@ func mouse_world() -> Vector3:
 
 func over_canvas() -> bool:
 	var p = get_viewport().get_mouse_position()
-	for hud in [top_panel, bottom_panel, left_panel, right_panel]:
-		if hud.get_global_rect().has_point(p):
+	for hud in [top_panel, bottom_panel, left_panel, right_panel, restore_ui_button]:
+		if hud.is_visible_in_tree() and hud.get_global_rect().has_point(p):
 			return false
 	return not file_dialog.visible and not mod_dialog.visible and not confirm_dialog.visible and not new_scene_dialog.visible and not sound_dialog.visible
 
