@@ -11,6 +11,7 @@ const Terrain = preload("res://scripts/terrain.gd")
 const Derailment = preload("res://scripts/derailment.gd")
 const VehicleConnections = preload("res://scripts/vehicle_connections.gd")
 const Sound = preload("res://scripts/audio.gd")
+const TouchCamera = preload("res://scripts/touch_camera.gd")
 const AMBER = Color("e9b56b")
 const MINT = Color("78dcc1")
 const MUTED = Color("91a5ac")
@@ -42,6 +43,9 @@ var camera_yaw = -0.63
 var camera_pitch = 0.82
 var camera_distance = 33.0
 var camera_orbit_basis = Basis.IDENTITY
+var touch_camera = TouchCamera.new()
+var touch_pointer_override = Vector2.INF
+var suppress_touch_mouse = false
 var follow_train = false
 var follow_car_index = 0
 var follow_rotation = false
@@ -139,13 +143,21 @@ func _ready() -> void:
 	simulation.train_removed.connect(func(_id): rebuild_trains())
 	create_world()
 	create_ui()
+	touch_camera.rotated.connect(rotate_camera)
+	touch_camera.panned.connect(pan_camera)
+	touch_camera.pinched.connect(zoom_camera)
+	touch_camera.tapped.connect(touch_canvas_tap)
+	touch_camera.held.connect(start_touch_brush)
+	touch_camera.hold_finished.connect(func(): brush_active = false)
+	get_window().focus_exited.connect(cancel_touch_input)
+	get_window().size_changed.connect(cancel_touch_input)
 	if "--scale=N" in OS.get_cmdline_user_args():
 		graph.scale_name = "N"
 		selected_track = "core:N:straight"
 	empty_scene()
 	set_mode(mode)
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(user_dir))
-	toast("欢迎来到轨道工坊。右键旋转视角，滚轮缩放；选择顶部工具开始搭建。", 8.0)
+	toast("欢迎来到轨道工坊。右键旋转、滚轮缩放；触屏单指旋转、双指平移和捏合缩放。", 8.0)
 	if OS.has_feature("web"):
 		web_files = preload("res://scripts/web_files.gd").new()
 		add_child(web_files)
@@ -168,6 +180,8 @@ func _ready() -> void:
 		call_deferred("audio_test")
 	if "--camera-test" in OS.get_cmdline_user_args():
 		call_deferred("camera_test")
+	if "--touch-test" in OS.get_cmdline_user_args():
+		call_deferred("touch_test")
 	if "--capture" in OS.get_cmdline_user_args():
 		call_deferred("capture_preview")
 
@@ -376,6 +390,8 @@ func create_ui() -> void:
 	follow_rotation_button.tooltip_text = "固定相机相对车厢的位置与朝向；平移、旋转和缩放可调整固定视角"
 	follow_rotation_button.toggled.connect(set_follow_rotation)
 	right_body.add_child(follow_rotation_button)
+	var touch_hint = label(right_body, "触屏视角：单指拖动旋转 · 双指拖动平移 · 捏合缩放\n轻点选择 / 放置；地形模式长按后涂刷", 12, MUTED)
+	touch_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	button(right_body, "复位 / 脱轨列车重新上轨", func():
 		var t = current_train()
 		if not t.is_empty():
@@ -473,6 +489,7 @@ func create_ui() -> void:
 	responsive_layout()
 
 func set_ui_visible(value: bool) -> void:
+	cancel_touch_input()
 	var focus = get_viewport().gui_get_focus_owner()
 	if focus != null and (ui.is_ancestor_of(focus) or focus == restore_ui_button):
 		focus.release_focus()
@@ -603,6 +620,7 @@ func clear_children(node: Node) -> void:
 		child.queue_free()
 
 func set_mode(value: String) -> void:
+	cancel_touch_input()
 	mode = value
 	reset_connection()
 	auto_connect = false
@@ -648,7 +666,7 @@ func set_mode(value: String) -> void:
 	left_body.add_child(scale_picker)
 	button(left_body, "载入示例布局", func(): confirm("载入 3.4 × 2.6 m 示例布局？当前编辑可以撤销。", func(): push_undo(); make_demo()))
 	button(left_body, "新建空白沙盘", show_new_scene)
-	var hints = {"operate":OPERATE_HINT, "track":track_placement_hint(), "terrain":"按住左键刷地形 · Ctrl+Z 撤销整次笔刷 · 轨道高程独立，填挖地形后可手动整平路基", "scenery":"左键放置布景 · R 旋转 · 橡皮擦删除 · 右键旋转视角 / 中键或 WASD 平移"}
+	var hints = {"operate":OPERATE_HINT, "track":track_placement_hint(), "terrain":"按住左键 / 触屏长按后刷地形 · Ctrl+Z 撤销整次笔刷 · 轨道高程独立，填挖地形后可手动整平路基", "scenery":"左键放置布景 · R 旋转 · 橡皮擦删除 · 右键旋转视角 / 中键或 WASD 平移"}
 	status_label.text = hints[mode]
 	responsive_layout()
 
@@ -928,6 +946,7 @@ func resize_sandbox(width: float, depth: float) -> void:
 	water.mesh.size = Vector3(terrain.width - 0.1, 0.025, terrain.depth - 0.1)
 
 func empty_scene(refresh: bool = true, width: float = Terrain.WIDTH, depth: float = Terrain.DEPTH) -> void:
+	cancel_touch_input()
 	sound.clear_trains()
 	brush_active = false
 	placing_train = false
@@ -1105,11 +1124,14 @@ func _process(dt: float) -> void:
 		return
 	update_train_visuals()
 	update_camera()
+	if modal_open():
+		cancel_touch_input()
+	touch_camera.update(dt, mode == "terrain")
 	update_keyboard_pan(dt)
 	update_camera()
 	sound.sync_trains(simulation.trains, train_nodes, camera.global_position, simulation.paused, dt)
 	preview_time += dt
-	if preview_time > 0.04:
+	if preview_time > 0.04 or touch_camera.holding:
 		update_preview()
 		preview_time = 0.0
 	if brush_active and mode == "terrain" and valid_placement:
@@ -1230,6 +1252,45 @@ func pan_camera(relative: Vector2) -> void:
 		if car != null:
 			follow_target_offset = follow_frame(car).affine_inverse() * camera_target
 
+func rotate_camera(relative: Vector2) -> void:
+	camera_yaw -= relative.x * 0.006
+	camera_pitch = clampf(camera_pitch + relative.y * 0.005, 0.15, 1.52)
+
+func zoom_camera(factor: float) -> void:
+	camera_distance = clampf(camera_distance * factor, 3.0, RailSceneFormat.MAX_CAMERA_DISTANCE)
+
+func modal_open() -> bool:
+	return file_dialog.visible or mod_dialog.visible or confirm_dialog.visible or new_scene_dialog.visible or sound_dialog.visible
+
+func cancel_touch_input() -> void:
+	touch_camera.cancel()
+	touch_pointer_override = Vector2.INF
+	brush_active = false
+
+func touch_canvas_tap(position: Vector2) -> void:
+	# Commit taps on release, after ruling out orbit/pan/pinch. Terrain uses a
+	# deliberate hold, so a navigation gesture cannot start painting on press.
+	if mode == "terrain":
+		return
+	touch_pointer_override = position
+	update_camera()
+	update_preview()
+	if valid_placement:
+		canvas_click()
+	touch_pointer_override = Vector2.INF
+
+func start_touch_brush(_position: Vector2) -> void:
+	update_preview()
+	if valid_placement:
+		canvas_click()
+
+func pointer_position() -> Vector2:
+	if touch_pointer_override.is_finite():
+		return touch_pointer_override
+	if not touch_camera.points.is_empty():
+		return touch_camera.points.values()[0]
+	return get_viewport().get_mouse_position()
+
 func update_keyboard_pan(dt: float) -> void:
 	if not get_window().has_focus():
 		return
@@ -1249,15 +1310,19 @@ func update_keyboard_pan(dt: float) -> void:
 		pan_camera(-direction.normalized() * dt * 600.0)
 
 func mouse_world() -> Vector3:
-	var p = get_viewport().get_mouse_position()
+	var p = pointer_position()
 	return terrain.ray_hit(camera.project_ray_origin(p), camera.project_ray_normal(p))
 
 func over_canvas() -> bool:
-	var p = get_viewport().get_mouse_position()
+	return canvas_contains(pointer_position())
+
+func canvas_contains(p: Vector2) -> bool:
+	if not get_viewport().get_visible_rect().has_point(p):
+		return false
 	for hud in [top_panel, bottom_panel, left_panel, right_panel, restore_ui_button]:
 		if hud.is_visible_in_tree() and hud.get_global_rect().has_point(p):
 			return false
-	return not file_dialog.visible and not mod_dialog.visible and not confirm_dialog.visible and not new_scene_dialog.visible and not sound_dialog.visible
+	return not modal_open()
 
 func update_preview() -> void:
 	valid_placement = false
@@ -1265,6 +1330,8 @@ func update_preview() -> void:
 	brush_ring.visible = false
 	if preview:
 		preview.visible = false
+	if not touch_camera.points.is_empty() and not touch_camera.holding and not touch_pointer_override.is_finite():
+		return
 	if placing_train:
 		status_label.text = "悬浮轨道预览编组 · 蓝色可放置 / 红色不可放置 · Tab 切换方向 · Esc 取消"
 	elif mode == "track" and not erase:
@@ -1452,10 +1519,13 @@ func update_train_preview(hit: Dictionary) -> void:
 	preview.visible = true
 
 func _unhandled_input(event: InputEvent) -> void:
+	# GUI still receives touch-emulated mouse events, but the scene uses the
+	# dedicated touch path and must never execute the emulated click as well.
+	if event is InputEventMouse and event.device == InputEvent.DEVICE_ID_EMULATION:
+		return
 	if event is InputEventMouseMotion:
 		if Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT):
-			camera_yaw -= event.relative.x * 0.006
-			camera_pitch = clampf(camera_pitch + event.relative.y * 0.005, 0.15, 1.52)
+			rotate_camera(event.relative)
 		elif Input.is_mouse_button_pressed(MOUSE_BUTTON_MIDDLE):
 			pan_camera(event.relative)
 	elif event is InputEventMouseButton:
@@ -1465,9 +1535,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 		if event.pressed:
 			if event.button_index == MOUSE_BUTTON_WHEEL_UP:
-				camera_distance = maxf(3.0, camera_distance * 0.9)
+				zoom_camera(0.9)
 			elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-				camera_distance = minf(RailSceneFormat.MAX_CAMERA_DISTANCE, camera_distance * 1.1)
+				zoom_camera(1.1)
 			elif event.button_index == MOUSE_BUTTON_LEFT:
 				update_preview()
 				if valid_placement:
@@ -1497,6 +1567,24 @@ func _unhandled_input(event: InputEvent) -> void:
 			capture_frame()
 
 func _input(event: InputEvent) -> void:
+	if event is InputEventMouse and event.device == InputEvent.DEVICE_ID_EMULATION:
+		# Godot emits the synthetic mouse event before its matching raw touch.
+		# Latch ownership until release, even if the finger crosses a HUD panel.
+		if event is InputEventMouseButton and event.pressed:
+			suppress_touch_mouse = canvas_contains(event.position)
+		var suppress = suppress_touch_mouse
+		if event is InputEventMouseButton and not event.pressed:
+			suppress_touch_mouse = false
+		if suppress:
+			get_viewport().set_input_as_handled()
+		return
+	if event is InputEventScreenTouch or event is InputEventScreenDrag:
+		if modal_open():
+			cancel_touch_input()
+		touch_camera.motion_scale = 700.0 / maxf(get_viewport().get_visible_rect().size.y, 1.0)
+		if touch_camera.handle(event, canvas_contains(event.position)):
+			get_viewport().set_input_as_handled()
+		return
 	if event is InputEventKey and event.keycode == KEY_H and event.pressed and not event.echo and not event.ctrl_pressed and not event.alt_pressed and not event.meta_pressed:
 		var focus = get_viewport().gui_get_focus_owner()
 		if not file_dialog.visible and not mod_dialog.visible and not confirm_dialog.visible and not new_scene_dialog.visible and not sound_dialog.visible and not (focus is LineEdit or focus is TextEdit):
@@ -1629,7 +1717,7 @@ func place_track() -> bool:
 	return true
 
 func pick_track() -> Dictionary:
-	var mouse = get_viewport().get_mouse_position()
+	var mouse = pointer_position()
 	var best = {}
 	var best_distance = 18.0
 	for edge in graph.edges.values():
@@ -1646,7 +1734,7 @@ func pick_track() -> Dictionary:
 	return best
 
 func pick_endpoint() -> Dictionary:
-	var mouse = get_viewport().get_mouse_position()
+	var mouse = pointer_position()
 	var best = {}
 	var distance = 24.0
 	for id in graph.edges:
@@ -1954,6 +2042,8 @@ func integration_test() -> void:
 	failures += await sound_test.run(self)
 	var camera_follow_test = load("res://tests/camera_follow.gd").new()
 	failures += await camera_follow_test.run(self)
+	var touch_camera_test = load("res://tests/touch_camera.gd").new()
+	failures += await touch_camera_test.run(self)
 	print("INTEGRATION_RESULT failures=" + str(failures))
 	get_tree().quit(1 if failures > 0 else 0)
 
@@ -1961,6 +2051,12 @@ func camera_test() -> void:
 	await get_tree().process_frame
 	var test = load("res://tests/camera_follow.gd").new()
 	var failures = await test.run(self, "--camera-capture" in OS.get_cmdline_user_args())
+	get_tree().quit(1 if failures > 0 else 0)
+
+func touch_test() -> void:
+	await get_tree().process_frame
+	var test = load("res://tests/touch_camera.gd").new()
+	var failures = await test.run(self)
 	get_tree().quit(1 if failures > 0 else 0)
 
 func flex_test() -> void:
