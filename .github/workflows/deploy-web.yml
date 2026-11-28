@@ -1,0 +1,158 @@
+name: Build and deploy Web
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Serialize deployments to the same destination, including manual runs.
+concurrency:
+  group: trackplayground-web-deploy
+  cancel-in-progress: false
+
+jobs:
+  web:
+    if: github.repository == 'fsship/TrackPlayground' && github.ref == 'refs/heads/main'
+    runs-on: windows-2022
+    timeout-minutes: 30
+    env:
+      GODOT_VERSION: '4.7.2'
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Cache Godot and Web templates
+        id: godot-cache
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            runtime/Godot.exe
+            export_templates
+          key: godot-web-${{ runner.os }}-${{ env.GODOT_VERSION }}-${{ hashFiles('.github/workflows/deploy-web.yml') }}
+
+      - name: Install Godot and Web templates
+        if: steps.godot-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:GODOT_VERSION
+          $baseUrl = "https://github.com/godotengine/godot-builds/releases/download/$version-stable"
+          $engineArchive = "Godot_v$version-stable_win64.exe.zip"
+          $templateArchive = "Godot_v$version-stable_export_templates.tpz"
+          # SHA-256 digests from the official 4.7.2 release assets.
+          $downloads = @{
+            $engineArchive = '731980f9608d61333e5baf54a2ef17210acc7a538446c0cb9969f002aca1e953'
+            $templateArchive = 'f298490b8d44d934be425a5a65a51bf15f422428b229a06a6e11d9ffea248011'
+          }
+          foreach ($name in $downloads.Keys) {
+            $archive = Join-Path $env:RUNNER_TEMP $name
+            curl.exe --fail --location --retry 3 --silent --show-error --output $archive "$baseUrl/$name"
+            if ($LASTEXITCODE -ne 0) { throw "Download failed: $name" }
+            if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $downloads[$name]) {
+              throw "Checksum mismatch: $name"
+            }
+          }
+          $templates = "export_templates/$version.stable"
+          New-Item -ItemType Directory -Force -Path 'runtime', $templates | Out-Null
+          [IO.File]::WriteAllText((Join-Path $PWD 'export_templates/.gdignore'), '')
+          $zip = [IO.Compression.ZipFile]::OpenRead((Join-Path $env:RUNNER_TEMP $engineArchive))
+          try {
+            $entry = $zip.GetEntry("Godot_v$version-stable_win64.exe")
+            [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, (Join-Path $PWD 'runtime/Godot.exe'), $true)
+          } finally { $zip.Dispose() }
+          $zip = [IO.Compression.ZipFile]::OpenRead((Join-Path $env:RUNNER_TEMP $templateArchive))
+          try {
+            foreach ($name in @('web_nothreads_debug.zip', 'web_nothreads_release.zip')) {
+              $entry = $zip.GetEntry("templates/$name")
+              [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, (Join-Path $PWD "$templates/$name"), $true)
+            }
+          } finally { $zip.Dispose() }
+
+      - name: Export Web release
+        shell: pwsh
+        run: ./Export.ps1 -Target Web
+
+      - name: Validate Web output
+        shell: pwsh
+        run: |
+          $required = @(
+            'index.html', 'index.js', 'index.wasm', 'index.pck',
+            'scene-files.js', 'scene-files.css',
+            'licenses/GODOT_LICENSE.txt', 'licenses/THIRD_PARTY_NOTICES.json', 'licenses/OFL.txt'
+          )
+          foreach ($name in $required) {
+            $file = Get-Item -LiteralPath "web-dist/$name" -ErrorAction Stop
+            if ($file.Length -eq 0) { throw "Empty build output: $name" }
+          }
+          foreach ($file in Get-ChildItem web-dist -File -Recurse) {
+            if ($file.Length -ge 100MB) { throw "Output exceeds GitHub's per-file limit: $($file.Name)" }
+          }
+
+      # Keep the build downloadable even if deployment credentials need fixing.
+      - name: Upload Web build
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: TrackPlayground-web-${{ github.sha }}
+          path: web-dist/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Check deployment credential
+        shell: pwsh
+        env:
+          DEPLOY_TOKEN: ${{ secrets.PAGES_DEPLOY_TOKEN }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:DEPLOY_TOKEN)) {
+            throw 'Add the PAGES_DEPLOY_TOKEN repository secret. See docs/WEB_DEPLOYMENT.md. The Web build is available in this run artifacts.'
+          }
+
+      - name: Check out website
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: fsship/fsship.github.io
+          ref: master
+          token: ${{ secrets.PAGES_DEPLOY_TOKEN }}
+          path: website
+
+      - name: Publish TrackPlayground directory
+        shell: bash
+        run: |
+          mkdir -p website/TrackPlayground
+          # Overlay exported files; preserve existing layout/ and other site content.
+          # The glob also omits the local-only .gdignore file.
+          cp -R web-dist/* website/TrackPlayground/
+          git -C website config user.name 'github-actions[bot]'
+          git -C website config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -C website add -- TrackPlayground
+          if git -C website diff --cached --quiet; then
+            echo 'Web output is unchanged; no commit needed.'
+          else
+            git -C website commit -m "Deploy TrackPlayground from ${GITHUB_SHA}"
+            # Rebase once if another website update landed during this build.
+            # Conflicts fail the run; never force-push the shared website branch.
+            if ! git -C website push origin HEAD:master; then
+              git -C website pull --rebase origin master
+              git -C website push origin HEAD:master
+            fi
+          fi
+          {
+            echo '### TrackPlayground Web'
+            echo "Source commit: ${GITHUB_SHA}"
+            echo 'Published to: fsship/fsship.github.io, master, TrackPlayground/'
+            echo 'Website: https://fsship.github.io/TrackPlayground/'
+            echo 'GitHub Pages may take a few minutes to update after the push.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload export logs on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: web-export-logs
+          path: build/export-*.log
+          if-no-files-found: ignore
+          retention-days: 7
